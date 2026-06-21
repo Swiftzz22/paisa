@@ -1,0 +1,209 @@
+// Expense tracker schema.
+// All amounts are in INR (paise stored as Decimal). One currency by design (v1).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  image     String? // Google profile picture URL
+  googleSub String?  @unique // Google's stable subject id (the real identity key)
+  createdAt DateTime @default(now())
+
+  transactions        Transaction[]
+  categories          Category[]
+  importBatches       ImportBatch[]
+  receivedEmails      ReceivedEmail[]
+  categorizationRules CategorizationRule[]
+  emailAccount        EmailAccount?
+  paymentModes        PaymentMode[]
+  budgets             Budget[]
+  sessions            Session[]
+}
+
+/// Server-side login session. The cookie holds only the random `token`; all
+/// other state lives here so sessions are revocable (delete the row → logged
+/// out everywhere). Distinct from EmailAccount, which holds Gmail-ingestion
+/// OAuth tokens, not login identity.
+model Session {
+  id        String   @id @default(uuid())
+  token     String   @unique // random opaque value stored in the cookie
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Monthly spending cap per category. One row per user/category — when set,
+/// the home page shows a progress bar and a soft warning at 80%/100%.
+model Budget {
+  id         String   @id @default(uuid())
+  userId     String
+  categoryId String
+  amountInr  Decimal
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId])
+}
+
+/// User-defined payment methods (Card, Cash, UPI, etc., plus anything the
+/// user adds — Wallet, Gift Card, BNPL, etc.). Transaction.paymentMode is a
+/// string referencing PaymentMode.value within the user's set.
+model PaymentMode {
+  id        String   @id @default(uuid())
+  userId    String
+  value     String // canonical lowercase key (e.g. "wallet")
+  label     String // display name (e.g. "Wallet")
+  builtin   Boolean  @default(false) // built-in modes can't be deleted by the user
+  archived  Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, value])
+}
+
+/// OAuth-connected email account (Gmail for v1). One per user.
+/// Tokens are AES-256-GCM encrypted at rest; ciphertext stored base64.
+model EmailAccount {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  provider        String    @default("gmail")
+  accountEmail    String // the connected Gmail address, for display
+  refreshTokenEnc String // ciphertext of OAuth refresh token
+  accessTokenEnc  String? // optional cache of last access token
+  expiresAt       DateTime? // access token expiry (informational)
+  scope           String // granted scopes, space-separated
+  lastSyncedAt    DateTime?
+  lastHistoryId   String? // Gmail history ID for incremental sync (later)
+  createdAt       DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Transaction {
+  id            String   @id @default(uuid())
+  userId        String
+  occurredAt    DateTime
+  merchantRaw   String?
+  merchant      String
+  amount        Decimal
+  paymentMode   String
+  source        String
+  type          String   @default("debit") // 'debit' (spending) | 'credit' (income / refund)
+  externalId    String?
+  note          String?
+  importBatchId String?
+  emailId       String?
+  createdAt     DateTime @default(now())
+
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  importBatch ImportBatch?   @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  email       ReceivedEmail? @relation(fields: [emailId], references: [id], onDelete: SetNull)
+  lines       ExpenseLine[]
+
+  @@unique([userId, externalId])
+  @@index([userId, occurredAt])
+}
+
+model ExpenseLine {
+  id            String  @id @default(uuid())
+  transactionId String
+  categoryId    String
+  amount        Decimal
+  note          String?
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  category    Category    @relation(fields: [categoryId], references: [id])
+
+  @@index([categoryId])
+}
+
+model Category {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String
+  parentId  String?
+  icon      String?
+  color     String?
+  archived  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent   Category?            @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children Category[]           @relation("CategoryHierarchy")
+  lines    ExpenseLine[]
+  rules    CategorizationRule[]
+  budgets  Budget[]
+
+  @@unique([userId, parentId, name])
+}
+
+/// User-supplied corrections that compound into accuracy.
+/// When the user changes a wrong AI category, we ask "always do this?" and save a rule.
+/// Rules apply during email ingestion BEFORE the LLM is called.
+model CategorizationRule {
+  id           String   @id @default(uuid())
+  userId       String
+  matcherType  String // 'merchant' | 'email_from'
+  matcherValue String // case-insensitive contains for merchant; case-insensitive exact for email_from
+  categoryId   String
+  priority     Int      @default(0) // higher wins on conflict
+  createdAt    DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id])
+
+  @@unique([userId, matcherType, matcherValue])
+  @@index([userId, matcherType])
+}
+
+model ImportBatch {
+  id         String   @id @default(uuid())
+  userId     String
+  filename   String
+  bank       String
+  rowCount   Int
+  importedAt DateTime @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+}
+
+model ReceivedEmail {
+  id          String   @id @default(uuid())
+  userId      String
+  messageId   String? // Gmail message id (used for dedup with Gmail API)
+  uid         Int? // legacy IMAP UID — unused after the OAuth switch
+  fromAddress String
+  subject     String
+  rawHtml     String // HTML body, or '' if text-only
+  bodyText    String? // plain-text body when present
+  receivedAt  DateTime
+  parseStatus String   @default("pending") // 'pending' | 'parsed' | 'failed' | 'ignored'
+  parseError  String?
+  createdAt   DateTime @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([userId, messageId])
+  @@unique([userId, uid])
+  @@index([userId, receivedAt])
+}

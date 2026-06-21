@@ -22,5 +22,104 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+/* Drifting aurora background for the hero. Two large soft blobs that breathe
+   across the panel. Respects reduced-motion. */
+.hero-aurora {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.hero-aurora::before,
+.hero-aurora::after {
+  content: "";
+  position: absolute;
+  width: 60%;
+  aspect-ratio: 1 / 1;
+  border-radius: 9999px;
+  filter: blur(80px);
+  opacity: 0.55;
+  animation: drift 18s ease-in-out infinite alternate;
+}
+
+.hero-aurora::before {
+  top: -10%;
+  left: -10%;
+  background: radial-gradient(circle, #6366f1 0%, transparent 60%);
+}
+
+.hero-aurora::after {
+  bottom: -20%;
+  right: -10%;
+  background: radial-gradient(circle, #ec4899 0%, transparent 60%);
+  animation-delay: -9s;
+}
+
+@media (prefers-color-scheme: dark) {
+  .hero-aurora::before {
+    background: radial-gradient(circle, #4f46e5 0%, transparent 60%);
+    opacity: 0.5;
+  }
+  .hero-aurora::after {
+    background: radial-gradient(circle, #db2777 0%, transparent 60%);
+    opacity: 0.45;
+  }
+}
+
+@keyframes drift {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(6%, 4%) scale(1.05); }
+  100% { transform: translate(-4%, -6%) scale(0.97); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-aurora::before,
+  .hero-aurora::after {
+    animation: none;
+  }
+}
+
+@layer components {
+  /* 16px font on mobile so iOS Safari doesn't auto-zoom on focus; shrinks to
+     14px on sm+ where the zoom isn't a thing. */
+  .input {
+    @apply w-full rounded-md border border-zinc-300 bg-white px-3 py-2.5
+           text-base text-zinc-900 placeholder:text-zinc-400
+           focus:outline-none focus:ring-2 focus:ring-zinc-900
+           sm:py-2 sm:text-sm
+           dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50
+           dark:placeholder:text-zinc-500 dark:focus:ring-zinc-100;
+  }
+
+  /* Buttons get a min-height of 44px on touch devices for accessibility. */
+  .btn-primary {
+    @apply inline-flex min-h-[44px] items-center justify-center rounded-md bg-zinc-900 px-4 py-2
+           text-sm font-medium text-white transition-colors hover:bg-zinc-800
+           focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:ring-offset-2
+           sm:min-h-0
+           dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200
+           dark:focus:ring-zinc-100 dark:focus:ring-offset-zinc-950;
+  }
+
+  .btn-secondary {
+    @apply inline-flex min-h-[44px] items-center justify-center rounded-md border border-zinc-300
+           bg-white px-4 py-2 text-sm font-medium text-zinc-900 transition-colors
+           hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-900
+           focus:ring-offset-2 sm:min-h-0 dark:border-zinc-700 dark:bg-zinc-900
+           dark:text-zinc-50 dark:hover:bg-zinc-800 dark:focus:ring-zinc-100
+           dark:focus:ring-offset-zinc-950;
+  }
+
+  .btn-danger {
+    @apply inline-flex min-h-[44px] items-center justify-center rounded-md border border-red-300
+           bg-white px-4 py-2 text-sm font-medium text-red-700 transition-colors
+           hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-600
+           focus:ring-offset-2 sm:min-h-0 dark:border-red-900 dark:bg-zinc-900 dark:text-red-300
+           dark:hover:bg-red-950 dark:focus:ring-offset-zinc-950;
+  }
 }
