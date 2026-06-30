@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { Analytics } from "@vercel/analytics/next";
 import { BottomNav } from "@/components/BottomNav";
 import { AskPopover } from "@/components/AskPopover";
 import { getSessionUser } from "@/lib/auth/session";
@@ -65,6 +66,7 @@ export default async function RootLayout({
             <AskPopover categories={[]} />
           </>
         ) : null}
+        <Analytics />
       </body>
     </html>
   );
