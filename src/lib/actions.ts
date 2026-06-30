@@ -230,11 +230,21 @@ export async function deleteTransactionAction(id: string) {
   redirect("/");
 }
 
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+
 export async function uploadStatementAction(form: FormData) {
   const user = await getCurrentUser();
   const file = form.get("statement");
   if (!file || typeof file === "string") {
     redirect("/settings/email?status=err&error=No+file+selected.");
+  }
+
+  // Reject oversized uploads before reading them into memory.
+  if ((file as File).size > MAX_UPLOAD_BYTES) {
+    redirect(
+      "/settings/email?status=err&error=" +
+        encodeURIComponent("File too large — max 10 MB.")
+    );
   }
 
   try {
