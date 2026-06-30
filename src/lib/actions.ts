@@ -13,10 +13,7 @@ import {
 import { revokeToken } from "@/lib/email/google-oauth";
 import { processPendingForUser } from "@/lib/email/process";
 import { runSyncForUser } from "@/lib/sync";
-import {
-  importHdfcStatement,
-  importHsbcStatement,
-} from "@/lib/statement-import";
+import { importUniversalStatement } from "@/lib/statement-import";
 import { recategorizeMiscForUser } from "@/lib/recategorize";
 import { GeminiRateLimitError } from "@/lib/email/parser";
 import { normalizePaymentValue } from "@/lib/payment-modes";
@@ -247,22 +244,17 @@ export async function uploadStatementAction(form: FormData) {
     );
   }
 
+  const cardholderName = readString(form, "cardholderName") || null;
+
   try {
     const buffer = Buffer.from(await (file as File).arrayBuffer());
     const filename = (file as File).name || "statement";
-    const ext = filename.toLowerCase().split(".").pop();
-    const isPdf = ext === "pdf";
-    const result = isPdf
-      ? await importHsbcStatement({
-          userId: user.id,
-          fileBuffer: buffer,
-          filename,
-        })
-      : await importHdfcStatement({
-          userId: user.id,
-          fileBuffer: buffer,
-          filename,
-        });
+    const result = await importUniversalStatement({
+      userId: user.id,
+      fileBuffer: buffer,
+      filename,
+      cardholderName,
+    });
 
     revalidatePath("/");
     revalidatePath("/settings/email");
@@ -271,12 +263,16 @@ export async function uploadStatementAction(form: FormData) {
       status: "imported",
       bank: result.bank,
       rows: String(result.totalRows),
-      upi: String(result.upiDebits),
       inserted: String(result.inserted),
+      debits: String(result.debits ?? 0),
+      credits: String(result.credits ?? 0),
       skippedRef: String(result.skippedByRef),
       skippedFuzzy: String(result.skippedByFuzzy),
       failed: String(result.failed),
     });
+    if (result.warnings && result.warnings.length > 0) {
+      params.set("warn", result.warnings[0]);
+    }
     redirect(`/settings/email?${params.toString()}`);
   } catch (e) {
     if (e instanceof Error && /NEXT_REDIRECT/.test(e.message)) throw e;

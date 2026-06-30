@@ -28,9 +28,12 @@ export default async function EmailSettingsPage({
     rows?: string;
     upi?: string;
     inserted?: string;
+    debits?: string;
+    credits?: string;
     skippedRef?: string;
     skippedFuzzy?: string;
     failed?: string;
+    warn?: string;
     count?: string;
   }>;
 }) {
@@ -93,20 +96,31 @@ export default async function EmailSettingsPage({
       ) : null}
       {params.status === "imported" ? (
         <Banner kind="ok">
-          Imported from {params.bank ?? "statement"}: {params.inserted} new
-          transactions added.
+          Imported from {params.bank ?? "statement"}: <strong>{params.inserted}</strong>{" "}
+          new transaction{params.inserted === "1" ? "" : "s"} added
+          {Number(params.debits ?? "0") + Number(params.credits ?? "0") > 0 ? (
+            <> ({params.debits} spent, {params.credits} received)</>
+          ) : null}
+          .
           {Number(params.skippedRef ?? "0") +
             Number(params.skippedFuzzy ?? "0") >
           0 ? (
             <>
               {" "}
-              Skipped {params.skippedRef} duplicates (same reference) and{" "}
-              {params.skippedFuzzy} duplicates (same day / amount / merchant).
+              Skipped {Number(params.skippedRef ?? "0") +
+                Number(params.skippedFuzzy ?? "0")}{" "}
+              duplicate{Number(params.skippedRef ?? "0") +
+                Number(params.skippedFuzzy ?? "0") ===
+              1
+                ? ""
+                : "s"}{" "}
+              already on file.
             </>
           ) : null}
           {Number(params.failed ?? "0") > 0 ? (
             <> {params.failed} rows failed.</>
           ) : null}
+          {params.warn ? <> {params.warn}</> : null}
         </Banner>
       ) : null}
       {params.status === "err" ? (
@@ -253,26 +267,40 @@ function UploadStatementCard() {
       className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
     >
       <h2 className="mb-2 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-        Import bank statement
+        Import a statement
       </h2>
       <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
-        Upload either an <strong>HDFC account statement (.xls)</strong> — UPI
-        debits get extracted — or an <strong>HSBC credit-card statement (.pdf)</strong>{" "}
-        — Sania Kothari&apos;s debit transactions from Jan 1, 2026 onward are
-        extracted. Duplicates against existing email or statement transactions
-        are detected automatically.
+        Upload any bank or credit-card statement —{" "}
+        <strong>PDF, Excel (.xlsx/.xls), or CSV</strong>. It&apos;s read by AI,
+        so format and bank don&apos;t matter: spends and credits are both
+        extracted and categorized, and duplicates of transactions you already
+        have (from email or an earlier import) are skipped automatically.
       </p>
-      <div className="flex flex-wrap items-end gap-2">
+      <div className="space-y-3">
         <input
           type="file"
           name="statement"
-          accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          accept=".pdf,.xls,.xlsx,.csv,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
           required
-          className="block text-sm file:mr-3 file:rounded-md file:border-0 file:bg-zinc-200 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-zinc-800 hover:file:bg-zinc-300 dark:file:bg-zinc-700 dark:file:text-zinc-100 dark:hover:file:bg-zinc-600"
+          className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-zinc-200 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-zinc-800 hover:file:bg-zinc-300 dark:file:bg-zinc-700 dark:file:text-zinc-100 dark:hover:file:bg-zinc-600"
         />
+        <label className="block">
+          <span className="mb-1 block text-[10px] uppercase tracking-wide text-zinc-500">
+            Cardholder name (optional)
+          </span>
+          <input
+            type="text"
+            name="cardholderName"
+            placeholder="Only for joint / family statements — e.g. Sania Kothari"
+            className="input"
+          />
+        </label>
         <button type="submit" className="btn-primary">
           Import
         </button>
+        <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
+          Big statements parse faster split by month. Max 10 MB.
+        </p>
       </div>
     </form>
   );
