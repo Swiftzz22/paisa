@@ -187,7 +187,7 @@ export async function runAgentLoop(params: {
         contents,
         config: {
           systemInstruction: { parts: [{ text: systemPrompt }] },
-          tools: [{ functionDeclarations: FUNCTION_DECLARATIONS as unknown[] as never }],
+          tools: [{ functionDeclarations: FUNCTION_DECLARATIONS as unknown as never }],
           temperature: 0,
         },
       })

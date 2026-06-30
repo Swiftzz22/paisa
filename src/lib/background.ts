@@ -28,14 +28,9 @@ export function startBackgroundSync(): void {
 
 async function runTick() {
   try {
-    const status = await runSyncTick();
-    if (status && (status.fetched > 0 || status.processed.parsed > 0)) {
-      console.log(
-        `[bg sync] ran @ ${status.ranAt.toISOString()} — fetched=${status.fetched} ` +
-          `parsed=${status.processed.parsed} ignored=${status.processed.ignored} ` +
-          `failed=${status.processed.failed} pending=${status.pendingRemaining}`
-      );
-    }
+    // runSyncTick iterates all connected users and records per-user status
+    // internally (see getLastSyncRun); it returns void.
+    await runSyncTick();
   } catch (e) {
     console.error("[bg sync] tick error:", e);
   }

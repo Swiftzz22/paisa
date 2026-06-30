@@ -309,14 +309,9 @@ export async function monthlyTotals(
       type,
       occurredAt: { gte: start, lte: end },
     },
-    include: args.category
-      ? {
-          lines: { include: { category: { include: { parent: true } } } },
-        }
-      : undefined,
-    select: args.category
-      ? undefined
-      : { amount: true, occurredAt: true },
+    include: {
+      lines: { include: { category: { include: { parent: true } } } },
+    },
   });
 
   // Build a seeded map so empty months still appear.
@@ -329,13 +324,9 @@ export async function monthlyTotals(
   }
 
   const catNeedle = args.category?.toLowerCase() ?? null;
-  for (const t of txs as Array<{
-    amount: unknown;
-    occurredAt: Date;
-    lines?: Array<{ category: { name: string; parent: { name: string } | null } | null }>;
-  }>) {
+  for (const t of txs) {
     if (catNeedle) {
-      const cat = t.lines?.[0]?.category ?? null;
+      const cat = t.lines[0]?.category ?? null;
       const rollup = cat?.parent?.name ?? cat?.name ?? "Uncategorized";
       if (!rollup.toLowerCase().includes(catNeedle)) continue;
     }
