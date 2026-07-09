@@ -45,6 +45,22 @@ export const FINANCIAL_DOMAIN_PATTERNS = [
   "billdesk",
 ];
 
+// Sub-senders that are ALWAYS marketing/newsletters even when the base domain
+// is a known bank. Banks blast promos from dedicated communication subdomains
+// (HSBC uses custcomm = customer communications, and informationservices for
+// research/newsletters) while real transaction alerts come from a separate
+// alerts address. Substring match against the from address.
+export const MARKETING_SENDER_PATTERNS = [
+  "custcomm", // HSBC promos: cmpadh…@custcomm.hsbc.co.in, HSBC@custcomm…
+  "informationservices", // HSBC research / market outlook newsletters
+  "google-noreply", // Google policy/account notices — GPay receipts use a different sender
+  "newsletter",
+  "campaign",
+  "marketing",
+  "promo", // matches promo / promotions / promotional
+  "offers",
+];
+
 // Positive signal: subject suggests an actual transaction event — either
 // money out (debits) OR money in (credits / refunds / received).
 const TRANSACTION_KEYWORDS =
@@ -53,7 +69,7 @@ const TRANSACTION_KEYWORDS =
 // Hard negatives — applied even to known bank senders. Anything matching
 // here is reliably non-transactional and saves an LLM call.
 const HARD_NEGATIVE_KEYWORDS =
-  /\b(otp|verification|verify|newsletter|webinar|congratulations|reward|welcome|economics|outlook|analysis|research|investment weekly|relationship manager|insight|opinion|preview|forecast|mark your calendar|kindly validate)\b/i;
+  /\b(otp|verification|verify|newsletter|webinar|congratulations|reward|welcome|economics|outlook|analysis|research|investment weekly|relationship manager|insight|opinion|preview|forecast|mark your calendar|kindly validate|terms of service|privacy policy|policy update)\b/i;
 
 // Soft negatives — additional filters for emails from UNKNOWN senders. These
 // terms are too aggressive for bank emails (HDFC uses "Account update" for
@@ -70,8 +86,14 @@ const SOFT_NEGATIVE_KEYWORDS =
  * server. Result looks like: `from:(hdfcbank OR icicibank OR hsbc OR ...)`.
  */
 export function buildFinancialSenderQuery(): string {
-  const tokens = FINANCIAL_DOMAIN_PATTERNS.map((p) => `from:${p}`);
-  return `(${tokens.join(" OR ")})`;
+  const positive = FINANCIAL_DOMAIN_PATTERNS.map((p) => `from:${p}`).join(" OR ");
+  const marketing = MARKETING_SENDER_PATTERNS.map((p) => `from:${p}`).join(" OR ");
+  // Keep only real transaction alerts: from a known bank/UPI sender, but NOT
+  // from a marketing sub-sender (HSBC custcomm/informationservices, Google
+  // policy notices) and not anything Gmail tabbed as Promotions. Bank txn
+  // alerts land in Primary/Updates, never Promotions, so this won't drop
+  // real transactions.
+  return `(${positive}) -(${marketing}) -category:promotions`;
 }
 
 /**
@@ -89,6 +111,11 @@ export function looksLikeTransactionEmail(params: {
 }): boolean {
   const subject = params.subject ?? "";
   const from = (params.fromAddress ?? "").toLowerCase();
+
+  // Marketing sub-senders are never transactions, even from a bank domain
+  // (e.g. HSBC blasts promos from custcomm.hsbc.co.in). Reject before anything
+  // else so these never reach the LLM.
+  if (MARKETING_SENDER_PATTERNS.some((pat) => from.includes(pat))) return false;
 
   if (HARD_NEGATIVE_KEYWORDS.test(subject)) return false;
 
