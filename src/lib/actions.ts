@@ -347,9 +347,16 @@ export async function runSyncNowAction() {
 
 export async function disconnectGmailAction() {
   const user = await getCurrentUser();
-  const refreshToken = await getRefreshToken(user.id);
-  if (refreshToken) {
-    await revokeToken(refreshToken);
+  // Best-effort: revoke at Google. If the stored token can't be decrypted
+  // (e.g. after a TOKEN_ENCRYPTION_KEY rotation), skip revocation — we must
+  // still delete the local record so the user isn't trapped and can reconnect.
+  try {
+    const refreshToken = await getRefreshToken(user.id);
+    if (refreshToken) {
+      await revokeToken(refreshToken);
+    }
+  } catch (e) {
+    console.error("[disconnectGmailAction] token revoke skipped:", e);
   }
   await deleteEmailAccount(user.id);
   revalidatePath("/settings/email");
