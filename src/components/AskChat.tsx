@@ -92,13 +92,30 @@ export function AskChat({
           })),
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
+      // Read as text first: a timed-out or crashed function returns an HTML /
+      // plain-text platform error page, not JSON. res.json() would throw a
+      // cryptic "Unexpected token 'A'…" — parse defensively instead.
+      const raw = await res.text();
+      let data:
+        | { error?: string; answer?: string; trace?: TraceEntry[]; steps?: number }
+        | null = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        data = null;
+      }
+      if (!res.ok || !data) {
+        const friendly =
+          res.status === 504 || res.status === 408
+            ? "That took too long to answer. Try a narrower question and ask again."
+            : res.status >= 500
+              ? "The assistant hit a snag on the server. Give it a moment and try again."
+              : `Server returned ${res.status}.`;
         setMessages([
           ...nextMessages,
           {
             role: "assistant",
-            content: data.error ?? `Server returned ${res.status}.`,
+            content: data?.error ?? friendly,
             errored: true,
           },
         ]);
@@ -107,7 +124,7 @@ export function AskChat({
           ...nextMessages,
           {
             role: "assistant",
-            content: data.answer,
+            content: data.answer ?? "I don't have an answer for that.",
             trace: data.trace,
             steps: data.steps,
           },
