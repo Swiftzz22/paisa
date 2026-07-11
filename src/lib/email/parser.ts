@@ -338,18 +338,24 @@ merchant string as provided.`;
     labels.join("\n"),
   ].join("\n");
 
-  const response = await callGeminiWithBackoff(() =>
-    ai.models.generateContent({
-      model: MODEL,
-      contents: [
-        { role: "user", parts: [{ text: prompt + "\n\n" + userContent }] },
-      ],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-        temperature: 0,
-      },
-    })
+  // Recategorize is triggered by a user click (a server action under a 60s
+  // cap). Fail fast on a rate-limit — sleeping the patient ~90s×3 backoff here
+  // would blow the timeout and 500 the page. The caller catches
+  // GeminiRateLimitError and reports "rate-limited, try again" gracefully.
+  const response = await callGeminiWithBackoff(
+    () =>
+      ai.models.generateContent({
+        model: MODEL,
+        contents: [
+          { role: "user", parts: [{ text: prompt + "\n\n" + userContent }] },
+        ],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: schema,
+          temperature: 0,
+        },
+      }),
+    { maxAttempts: 1, minIntervalMs: 400 }
   );
   const text = response.text;
   if (!text) throw new Error("Gemini returned no content for category batch.");
