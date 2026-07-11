@@ -18,7 +18,10 @@ import { callGeminiWithBackoff } from "@/lib/email/parser";
 // `from1Month`, but coerceArgs() below normalises those, so Lite is back on
 // the menu — and the higher rate ceiling matters a lot for interactive chat.
 const MODEL = "gemini-2.5-flash-lite";
-const MAX_STEPS = 8;
+// Each step is one Gemini round-trip. Most questions resolve in 2–3; capping
+// lower bounds worst-case calls (easier on the free-tier rate limit) while
+// still leaving room for a tool retry or a two-part question.
+const MAX_STEPS = 5;
 /** Hard cap on the JSON size of a tool result before going back to the LLM. */
 const MAX_RESULT_BYTES = 50_000;
 

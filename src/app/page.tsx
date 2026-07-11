@@ -12,6 +12,7 @@ import {
 } from "@/components/charts/SpendingCharts";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { recategorizeMiscAction } from "@/lib/actions";
+import { SubmitButton } from "@/components/SubmitButton";
 import {
   getBudgetProgress,
   getMonthOverMonthDelta,
@@ -226,15 +227,15 @@ export default async function Home({
 
       {miscTotalCount > 0 ? (
         <form action={recategorizeMiscAction} className="mb-4">
-          <button
-            type="submit"
-            className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200 dark:hover:bg-amber-900/40"
+          <SubmitButton
+            pendingText="Re-categorizing…"
+            className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:cursor-wait disabled:opacity-70 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200 dark:hover:bg-amber-900/40"
             title="Send each unique Misc merchant through your rules + Gemini for a better category."
           >
             <span aria-hidden>✨</span>
             Re-categorize {miscTotalCount} Misc transaction
             {miscTotalCount === 1 ? "" : "s"}
-          </button>
+          </SubmitButton>
         </form>
       ) : null}
 
