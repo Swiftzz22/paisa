@@ -54,6 +54,10 @@ export type RangeSummary = {
   count: number;
   txs: TxRow[];
   byDay: DayGroup[];
+  /** True when the rendered list was capped (see LIST_CAP) — `count` is the
+   * real total; `byDay` only holds the most recent `listShown`. */
+  listTruncated: boolean;
+  listShown: number;
 
   /** Spent/count for the full range, ignoring filters — for the "X of Y" stat. */
   spentUnfiltered: number;
@@ -156,7 +160,13 @@ export async function getRangeSummary(params: {
   const received = filteredRows
     .filter((r) => r.type === "credit")
     .reduce((s, r) => s + r.amount, 0);
-  const byDay = groupByDay(filteredRows);
+
+  // Totals and charts above cover the whole (filtered) range; the rendered
+  // list is capped to the most recent LIST_CAP so wide ranges ("This year")
+  // don't ship hundreds of DOM rows. filteredRows is already newest-first.
+  const LIST_CAP = 100;
+  const listRows = filteredRows.slice(0, LIST_CAP);
+  const byDay = groupByDay(listRows);
 
   const monthlyBars = await getMonthlyBars(params.userId);
 
@@ -167,6 +177,8 @@ export async function getRangeSummary(params: {
     count: filteredRows.length,
     txs: filteredRows,
     byDay,
+    listTruncated: filteredRows.length > LIST_CAP,
+    listShown: listRows.length,
     spentUnfiltered,
     countUnfiltered: allRows.length,
     byCategory,

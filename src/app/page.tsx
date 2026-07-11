@@ -19,6 +19,9 @@ import {
 } from "@/lib/budgets";
 
 export const dynamic = "force-dynamic";
+// Recategorize (Gemini, batched) can run past the default ~10s function cap;
+// give server actions invoked from this page more headroom.
+export const maxDuration = 60;
 
 type SearchParams = Promise<{
   range?: string;
@@ -332,6 +335,13 @@ export default async function Home({
         <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Transactions
         </h2>
+        {summary.listTruncated ? (
+          <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+            Showing the {summary.listShown} most recent of {summary.count}.
+            Narrow the date range or search to see the rest — totals and charts
+            above still cover the full range.
+          </p>
+        ) : null}
         {summary.byDay.length === 0 ? (
           <EmptyState />
         ) : (
