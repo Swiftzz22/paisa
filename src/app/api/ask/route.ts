@@ -7,6 +7,10 @@ import { checkAndRecord } from "@/lib/agent/rate-limit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+// The agent loop makes several Gemini + DB tool calls per question; the default
+// ~10s function cap can cut it off mid-loop and leave the UI stuck on
+// "Thinking…". Give it real headroom.
+export const maxDuration = 60;
 
 const RequestBody = z.object({
   message: z.string().min(1).max(2000),
