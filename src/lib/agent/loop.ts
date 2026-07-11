@@ -181,16 +181,22 @@ export async function runAgentLoop(params: {
   const trace: TraceEntry[] = [];
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const response = await callGeminiWithBackoff(() =>
-      ai.models.generateContent({
-        model: MODEL,
-        contents,
-        config: {
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          tools: [{ functionDeclarations: FUNCTION_DECLARATIONS as unknown as never }],
-          temperature: 0,
-        },
-      })
+    const response = await callGeminiWithBackoff(
+      () =>
+        ai.models.generateContent({
+          model: MODEL,
+          contents,
+          config: {
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            tools: [{ functionDeclarations: FUNCTION_DECLARATIONS as unknown as never }],
+            temperature: 0,
+          },
+        }),
+      // Interactive path: this loop makes several sequential calls, so the
+      // 4.5s batch throttle would alone blow the function timeout. Use a light
+      // gap, and fail fast on a 429 (surface "try again" in ~1s instead of
+      // sleeping ~90s and 504-ing).
+      { maxAttempts: 1, minIntervalMs: 400 }
     );
 
     const candidate = response.candidates?.[0];

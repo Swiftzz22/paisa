@@ -14,11 +14,11 @@ let lastCallAt = 0;
 /** Max emails sent in a single Gemini request. */
 export const BATCH_SIZE = 10;
 
-async function throttle(): Promise<void> {
+async function throttle(minIntervalMs: number = MIN_INTERVAL_MS): Promise<void> {
   const elapsed = Date.now() - lastCallAt;
-  if (elapsed < MIN_INTERVAL_MS) {
+  if (elapsed < minIntervalMs) {
     await new Promise((resolve) =>
-      setTimeout(resolve, MIN_INTERVAL_MS - elapsed)
+      setTimeout(resolve, minIntervalMs - elapsed)
     );
   }
   lastCallAt = Date.now();
@@ -48,12 +48,13 @@ function parseRetryAfter(msg: string): number | null {
  * still hits 429 — at which point the daily quota is probably exhausted.
  */
 export async function callGeminiWithBackoff<T>(
-  makeRequest: () => Promise<T>
+  makeRequest: () => Promise<T>,
+  opts?: { maxAttempts?: number; minIntervalMs?: number }
 ): Promise<T> {
-  const maxAttempts = 3;
+  const maxAttempts = opts?.maxAttempts ?? 3;
   let lastRetrySec = 60;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    await throttle();
+    await throttle(opts?.minIntervalMs);
     try {
       return await makeRequest();
     } catch (e) {
