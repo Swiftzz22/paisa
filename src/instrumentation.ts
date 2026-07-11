@@ -13,7 +13,9 @@ export async function register() {
   // like Ask. Production sync is handled by the daily Vercel cron
   // (/api/cron/sync). Only run the in-process loop in a persistent local dev
   // server.
-  if (process.env.VERCEL) return;
+  // Vercel sets VERCEL=1; production builds set NODE_ENV=production. Either
+  // one means we must NOT run the in-process loop.
+  if (process.env.VERCEL || process.env.NODE_ENV === "production") return;
   const { startBackgroundSync } = await import("@/lib/background");
   startBackgroundSync();
 }
