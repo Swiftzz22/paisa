@@ -307,7 +307,7 @@ export default async function Home({
         <section className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
           <ChartCard title="By category">
             <p className="-mt-1 mb-2 text-[11px] text-zinc-500">
-              Click a slice to filter the list below.
+              Tap a label below to filter the list.
             </p>
             <CategoryPie
               data={summary.byCategory}
@@ -316,7 +316,7 @@ export default async function Home({
           </ChartCard>
           <ChartCard title="By payment mode">
             <p className="-mt-1 mb-2 text-[11px] text-zinc-500">
-              Click a slice to filter the list below.
+              Tap a label below to filter the list.
             </p>
             <PaymentPie
               data={summary.byPaymentMode}

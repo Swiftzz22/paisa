@@ -10,7 +10,6 @@ import {
   Bar,
   XAxis,
   YAxis,
-  Legend,
 } from "recharts";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { formatINR } from "@/lib/format";
@@ -96,48 +95,55 @@ export function CategoryPie({
   const toggle = useToggleParam();
   if (data.length === 0) return <EmptyChart label="No spending" />;
   return (
-    <div className="h-64 w-full">
-      <ResponsiveContainer>
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey="amount"
-            nameKey="name"
-            cx="50%"
-            cy="50%"
-            innerRadius={50}
-            outerRadius={90}
-            paddingAngle={1}
-            isAnimationActive={false}
-            onClick={(payload: unknown) => {
-              const p = payload as { name?: string; payload?: { name?: string } };
-              const name = p?.name ?? p?.payload?.name;
-              if (name) toggle("category", name);
-            }}
-            cursor="pointer"
-          >
-            {data.map((entry, i) => {
-              const isActive = activeCategory === entry.name;
-              const dim = activeCategory && !isActive;
-              return (
-                <Cell
-                  key={entry.name}
-                  fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]}
-                  fillOpacity={dim ? 0.25 : 1}
-                  stroke={isActive ? "#000" : "transparent"}
-                  strokeWidth={isActive ? 2 : 0}
-                />
-              );
-            })}
-          </Pie>
-          <Tooltip content={<PieTooltip />} />
-          <Legend
-            verticalAlign="bottom"
-            iconSize={8}
-            wrapperStyle={{ fontSize: 11 }}
-          />
-        </PieChart>
-      </ResponsiveContainer>
+    <div>
+      <div className="h-56 w-full">
+        <ResponsiveContainer>
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey="amount"
+              nameKey="name"
+              cx="50%"
+              cy="50%"
+              innerRadius={50}
+              outerRadius={90}
+              paddingAngle={1}
+              isAnimationActive={false}
+              onClick={(payload: unknown) => {
+                const p = payload as { name?: string; payload?: { name?: string } };
+                const name = p?.name ?? p?.payload?.name;
+                if (name) toggle("category", name);
+              }}
+              cursor="pointer"
+            >
+              {data.map((entry, i) => {
+                const isActive = activeCategory === entry.name;
+                const dim = activeCategory && !isActive;
+                return (
+                  <Cell
+                    key={entry.name}
+                    fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]}
+                    fillOpacity={dim ? 0.25 : 1}
+                    stroke={isActive ? "#000" : "transparent"}
+                    strokeWidth={isActive ? 2 : 0}
+                  />
+                );
+              })}
+            </Pie>
+            <Tooltip content={<PieTooltip />} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <ClickableLegend
+        items={data.map((d, i) => ({
+          key: d.name,
+          label: d.name,
+          color: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
+          active: activeCategory === d.name,
+        }))}
+        anyActive={Boolean(activeCategory)}
+        onToggle={(key) => toggle("category", key)}
+      />
     </div>
   );
 }
@@ -152,48 +158,55 @@ export function PaymentPie({
   const toggle = useToggleParam();
   if (data.length === 0) return <EmptyChart label="No spending" />;
   return (
-    <div className="h-64 w-full">
-      <ResponsiveContainer>
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey="amount"
-            nameKey="label"
-            cx="50%"
-            cy="50%"
-            innerRadius={50}
-            outerRadius={90}
-            paddingAngle={1}
-            isAnimationActive={false}
-            onClick={(payload: unknown) => {
-              const p = payload as { mode?: string; payload?: { mode?: string } };
-              const mode = p?.mode ?? p?.payload?.mode;
-              if (mode) toggle("paymentMode", mode);
-            }}
-            cursor="pointer"
-          >
-            {data.map((entry) => {
-              const isActive = activeMode === entry.mode;
-              const dim = activeMode && !isActive;
-              return (
-                <Cell
-                  key={entry.mode}
-                  fill={PAYMENT_COLORS[entry.mode] ?? "#71717a"}
-                  fillOpacity={dim ? 0.25 : 1}
-                  stroke={isActive ? "#000" : "transparent"}
-                  strokeWidth={isActive ? 2 : 0}
-                />
-              );
-            })}
-          </Pie>
-          <Tooltip content={<PieTooltip />} />
-          <Legend
-            verticalAlign="bottom"
-            iconSize={8}
-            wrapperStyle={{ fontSize: 11 }}
-          />
-        </PieChart>
-      </ResponsiveContainer>
+    <div>
+      <div className="h-56 w-full">
+        <ResponsiveContainer>
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey="amount"
+              nameKey="label"
+              cx="50%"
+              cy="50%"
+              innerRadius={50}
+              outerRadius={90}
+              paddingAngle={1}
+              isAnimationActive={false}
+              onClick={(payload: unknown) => {
+                const p = payload as { mode?: string; payload?: { mode?: string } };
+                const mode = p?.mode ?? p?.payload?.mode;
+                if (mode) toggle("paymentMode", mode);
+              }}
+              cursor="pointer"
+            >
+              {data.map((entry) => {
+                const isActive = activeMode === entry.mode;
+                const dim = activeMode && !isActive;
+                return (
+                  <Cell
+                    key={entry.mode}
+                    fill={PAYMENT_COLORS[entry.mode] ?? "#71717a"}
+                    fillOpacity={dim ? 0.25 : 1}
+                    stroke={isActive ? "#000" : "transparent"}
+                    strokeWidth={isActive ? 2 : 0}
+                  />
+                );
+              })}
+            </Pie>
+            <Tooltip content={<PieTooltip />} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <ClickableLegend
+        items={data.map((d) => ({
+          key: d.mode,
+          label: d.label,
+          color: PAYMENT_COLORS[d.mode] ?? "#71717a",
+          active: activeMode === d.mode,
+        }))}
+        anyActive={Boolean(activeMode)}
+        onToggle={(key) => toggle("paymentMode", key)}
+      />
     </div>
   );
 }
@@ -245,6 +258,51 @@ export function MonthlyTrendBar({ data }: { data: MonthlyBar[] }) {
           <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * A tappable legend that doubles as the filter control. Recharts v3's slice
+ * onClick is unreliable, so these plain buttons are the source of truth for
+ * "click a category/mode to filter" — and they're far easier to hit on mobile
+ * than a thin donut slice.
+ */
+function ClickableLegend({
+  items,
+  anyActive,
+  onToggle,
+}: {
+  items: Array<{ key: string; label: string; color: string; active: boolean }>;
+  anyActive: boolean;
+  onToggle: (key: string) => void;
+}) {
+  return (
+    <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+      {items.map((it) => (
+        <button
+          key={it.key}
+          type="button"
+          onClick={() => onToggle(it.key)}
+          aria-pressed={it.active}
+          title={it.active ? `Clear ${it.label} filter` : `Filter to ${it.label}`}
+          className={
+            "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors " +
+            (it.active
+              ? "border-zinc-400 bg-zinc-100 text-zinc-900 dark:border-zinc-500 dark:bg-zinc-800 dark:text-zinc-50"
+              : anyActive
+                ? "border-zinc-200 text-zinc-400 hover:text-zinc-700 dark:border-zinc-800 dark:text-zinc-500 dark:hover:text-zinc-300"
+                : "border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800")
+          }
+        >
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ backgroundColor: it.color }}
+            aria-hidden
+          />
+          {it.label}
+        </button>
+      ))}
     </div>
   );
 }
