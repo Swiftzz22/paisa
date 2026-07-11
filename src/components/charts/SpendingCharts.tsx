@@ -108,8 +108,10 @@ export function CategoryPie({
             innerRadius={50}
             outerRadius={90}
             paddingAngle={1}
+            isAnimationActive={false}
             onClick={(payload: unknown) => {
-              const name = (payload as { name?: string })?.name;
+              const p = payload as { name?: string; payload?: { name?: string } };
+              const name = p?.name ?? p?.payload?.name;
               if (name) toggle("category", name);
             }}
             cursor="pointer"
@@ -162,8 +164,10 @@ export function PaymentPie({
             innerRadius={50}
             outerRadius={90}
             paddingAngle={1}
+            isAnimationActive={false}
             onClick={(payload: unknown) => {
-              const mode = (payload as { mode?: string })?.mode;
+              const p = payload as { mode?: string; payload?: { mode?: string } };
+              const mode = p?.mode ?? p?.payload?.mode;
               if (mode) toggle("paymentMode", mode);
             }}
             cursor="pointer"
@@ -238,7 +242,7 @@ export function MonthlyTrendBar({ data }: { data: MonthlyBar[] }) {
             width={36}
           />
           <Tooltip content={<BarTooltip />} cursor={{ fill: "rgba(120,120,120,0.08)" }} />
-          <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+          <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
     </div>
