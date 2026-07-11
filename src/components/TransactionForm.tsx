@@ -1,5 +1,6 @@
 import { type CategoryOption } from "@/lib/categories";
 import { toDateInput } from "@/lib/format";
+import { CategorySelect } from "@/components/CategorySelect";
 
 export type PaymentModeChoice = { value: string; label: string };
 
@@ -119,22 +120,11 @@ export function TransactionForm({
       </div>
 
       <Field label="Category" htmlFor="categoryId">
-        <select
-          id="categoryId"
+        <CategorySelect
           name="categoryId"
-          required
-          defaultValue={initial?.categoryId ?? ""}
-          className="input"
-        >
-          <option value="" disabled>
-            Select…
-          </option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.label}
-            </option>
-          ))}
-        </select>
+          initialCategories={categories}
+          defaultCategoryId={initial?.categoryId}
+        />
       </Field>
 
       <Field label="Note (optional)" htmlFor="note">

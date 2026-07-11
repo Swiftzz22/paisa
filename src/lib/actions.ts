@@ -496,6 +496,32 @@ export async function addCategoryAction(form: FormData) {
   redirect(`/settings/categories?status=added&name=${encodeURIComponent(name)}`);
 }
 
+/**
+ * Create a top-level category inline (from the transaction edit form) and
+ * return it so the client can select it without a page reload. If one with
+ * that name already exists, returns the existing one (idempotent-ish).
+ */
+export async function createCategoryInlineAction(
+  name: string
+): Promise<{ id: string; label: string } | { error: string }> {
+  const user = await getCurrentUser();
+  const trimmed = (name ?? "").trim();
+  if (!trimmed) return { error: "Enter a category name." };
+  if (trimmed.length > 40) return { error: "Keep it under 40 characters." };
+
+  const existing = await prisma.category.findFirst({
+    where: { userId: user.id, parentId: null, name: trimmed },
+  });
+  if (existing) return { id: existing.id, label: existing.name };
+
+  const created = await prisma.category.create({
+    data: { userId: user.id, name: trimmed, parentId: null },
+  });
+  revalidatePath("/settings/categories");
+  revalidatePath("/");
+  return { id: created.id, label: created.name };
+}
+
 export async function archiveCategoryAction(id: string) {
   const user = await getCurrentUser();
   await prisma.category.updateMany({
