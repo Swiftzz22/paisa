@@ -45,33 +45,115 @@ export type AgentResult = {
   steps: number;
 };
 
-function buildSystemPrompt(ctx: {
+type DateAnchors = {
   today: string;
-  earliest: string | null;
-  categories: string[];
-  modes: Array<{ value: string; label: string }>;
-}): string {
+  weekday: string;
+  yesterday: string;
+  thisWeek: string; // "YYYY-MM-DD to YYYY-MM-DD"
+  lastWeek: string;
+  thisMonth: string;
+  lastMonth: string;
+  thisYear: string;
+  lastWeekdayDates: Record<string, string>; // "Monday" -> "YYYY-MM-DD"
+};
+
+/**
+ * Pre-compute concrete date ranges in IST so the model never has to do date
+ * arithmetic (flash-lite is unreliable at "what date was last Monday?"). India
+ * has no DST, so IST is a fixed UTC+5:30 offset.
+ */
+function computeDateAnchors(now: Date = new Date()): DateAnchors {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const ist = new Date(now.getTime() + IST_OFFSET_MS);
+  const y = ist.getUTCFullYear();
+  const m = ist.getUTCMonth();
+  const d = ist.getUTCDate();
+  const dow = ist.getUTCDay(); // 0=Sun..6=Sat
+  const WEEKDAYS = [
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+  ];
+
+  const iso = (yy: number, mm: number, dd: number) =>
+    new Date(Date.UTC(yy, mm, dd)).toISOString().slice(0, 10);
+  const shift = (days: number) => {
+    const t = new Date(Date.UTC(y, m, d));
+    t.setUTCDate(t.getUTCDate() + days);
+    return t.toISOString().slice(0, 10);
+  };
+
+  const today = iso(y, m, d);
+  const mondayOffset = (dow + 6) % 7; // days since Monday (Mon=0 … Sun=6)
+
+  const lastWeekdayDates: Record<string, string> = {};
+  for (let i = 0; i < 7; i++) {
+    let delta = (dow - i + 7) % 7; // days back to weekday i
+    if (delta === 0) delta = 7; // "last <today's weekday>" = the previous one
+    lastWeekdayDates[WEEKDAYS[i]] = shift(-delta);
+  }
+
+  return {
+    today,
+    weekday: WEEKDAYS[dow],
+    yesterday: shift(-1),
+    thisWeek: `${shift(-mondayOffset)} to ${today}`,
+    lastWeek: `${shift(-mondayOffset - 7)} to ${shift(-mondayOffset - 1)}`,
+    thisMonth: `${iso(y, m, 1)} to ${today}`,
+    lastMonth: `${iso(y, m - 1, 1)} to ${iso(y, m, 0)}`,
+    thisYear: `${iso(y, 0, 1)} to ${today}`,
+    lastWeekdayDates,
+  };
+}
+
+function buildSystemPrompt(
+  ctx: {
+    earliest: string | null;
+    categories: string[];
+    modes: Array<{ value: string; label: string }>;
+  },
+  a: DateAnchors
+): string {
+  const weekStart = a.thisWeek.split(" to ")[0];
   return `You are paisa.'s assistant for Sania, a college student in India tracking her personal spending. Help her answer questions about her own financial data using ONLY the tools you've been given.
 
 GROUND RULES (non-negotiable):
 1. All numbers MUST come from tool calls. Never invent, estimate, or guess. If a tool returns no rows, say "I don't see any data for that" plainly.
-2. Today is ${ctx.today}. The earliest transaction on file is ${ctx.earliest ?? "unknown"}.
+2. Today is ${a.today} (${a.weekday}), IST. The earliest transaction on file is ${ctx.earliest ?? "unknown"}.
 3. Money is in INR. Format as ₹1,23,456.78 (Indian comma grouping).
 4. Be concise — one short paragraph plus a small list at most. No filler, no disclaimers.
-5. If a question is ambiguous (e.g. "last month" — calendar vs fiscal), pick the obvious interpretation and state which.
-6. ALL TOOLS ARE READ-ONLY. Never claim to have changed, created, or set anything.
-7. When users mention a category, map to one of the EXACT top-level category names below.
+5. ALL TOOLS ARE READ-ONLY. Never claim to have changed, created, or set anything.
+6. When users mention a category, map to one of the EXACT top-level category names listed under CURRENT STATE.
+
+DATE ANCHORS (IST — use these dates directly, do NOT compute your own):
+- Yesterday: ${a.yesterday}
+- This week (Mon–today): ${a.thisWeek}
+- Last week (Mon–Sun): ${a.lastWeek}
+- This month (1st–today): ${a.thisMonth}
+- Last month: ${a.lastMonth}
+- This year: ${a.thisYear}
+- Most recent past weekday → date: ${Object.entries(a.lastWeekdayDates)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(", ")}
+
+TIME FILTERS (this is where you tend to slip — be strict):
+- If the question mentions ANY time period ("this week", "last month", "yesterday", "on Friday", "last Monday"), you MUST pass the matching from/to (or fromMonth/toMonth) from the anchors above. NEVER answer a time-scoped question with all-time data.
+- "last <weekday>" is a SINGLE day: set from = to = that date.
+- "how much did I spend [period]" → aggregateByCategory over that range, then sum the categories for the total.
+- "biggest/largest single transaction [period]" → queryTransactions with from/to and limit 1.
 
 TOOL CALL DISCIPLINE:
-- Use the EXACT parameter names from the tool schemas (e.g. monthlyTotals takes "fromMonth" and "toMonth" — NOT "from1Month", "from_month", or "month_from").
-- If a tool returns an error message about a parameter, READ the error, fix the parameter name or value, and CALL THE TOOL AGAIN. Do not give up after one failed call. You have up to ${MAX_STEPS} steps; spend them on recovery.
-- Dates are YYYY-MM-DD. Months are YYYY-MM. Never include a time.
+- Use the EXACT parameter names from the schemas (monthlyTotals takes "fromMonth"/"toMonth" — not "from1Month" or "from_month").
+- If a tool returns a parameter error, READ it, fix the name/value, and CALL AGAIN. You have up to ${MAX_STEPS} steps — spend them recovering, don't give up after one failed call.
+- Dates are YYYY-MM-DD, months YYYY-MM. Never include a time.
 
-CURRENT STATE (no need to call getContext for this):
+WORKED EXAMPLES:
+- "biggest UPI transaction this week" → queryTransactions({ type:"debit", paymentMode:"upi", from:"${weekStart}", to:"${a.today}", limit:1 })
+- "how much did I spend last Monday" → aggregateByCategory({ from:"${a.lastWeekdayDates.Monday}", to:"${a.lastWeekdayDates.Monday}" }), then sum the returned categories.
+
+CURRENT STATE (no need to call getContext):
 - Top-level categories: ${ctx.categories.join(", ")}
 - Payment modes: ${ctx.modes.map((m) => `${m.value} (${m.label})`).join(", ")}
 
-If a question can't be answered with the available tools, say so directly rather than improvising.`;
+If a question truly can't be answered with the tools, say so plainly rather than improvising.`;
 }
 
 /**
@@ -164,12 +246,14 @@ export async function runAgentLoop(params: {
   // Resolve context up front and bake it into the system prompt — saves a
   // tool call per session.
   const ctx = await getContext(params.userId);
-  const systemPrompt = buildSystemPrompt({
-    today: ctx.today,
-    earliest: ctx.earliestTransactionDate,
-    categories: ctx.availableCategories,
-    modes: ctx.availablePaymentModes,
-  });
+  const systemPrompt = buildSystemPrompt(
+    {
+      earliest: ctx.earliestTransactionDate,
+      categories: ctx.availableCategories,
+      modes: ctx.availablePaymentModes,
+    },
+    computeDateAnchors()
+  );
 
   // Build the Contents array. Each ChatMessage becomes one Content turn.
   const contents: Content[] = params.history.map((m) => ({
