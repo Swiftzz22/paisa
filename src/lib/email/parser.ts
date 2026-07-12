@@ -53,12 +53,29 @@ export async function callGeminiWithBackoff<T>(
 ): Promise<T> {
   const maxAttempts = opts?.maxAttempts ?? 3;
   let lastRetrySec = 60;
+  let overloadRetries = 0;
+  const MAX_OVERLOAD_RETRIES = 2;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await throttle(opts?.minIntervalMs);
     try {
       return await makeRequest();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      // Transient model overload (503 UNAVAILABLE / "high demand") — Google-side
+      // spikes that are usually brief. Retry quickly a couple of times without
+      // consuming the rate-limit attempt budget; if it persists, surface a clean
+      // message instead of the raw error JSON.
+      if (/\b503\b|UNAVAILABLE|overloaded|high demand/i.test(msg)) {
+        if (overloadRetries < MAX_OVERLOAD_RETRIES) {
+          overloadRetries++;
+          attempt--;
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        throw new Error(
+          "The AI model is briefly overloaded on Google's side. Please try again in a few seconds."
+        );
+      }
       const retrySec = parseRetryAfter(msg);
       if (retrySec === null) throw e; // not a 429 — propagate as a real error
       lastRetrySec = retrySec;

@@ -13,11 +13,11 @@ const EXPECTED_KEYS: Record<string, readonly string[]> = Object.fromEntries(
 );
 import { callGeminiWithBackoff } from "@/lib/email/parser";
 
-// gemini-2.5-flash-lite: ~30 RPM (vs 10 on regular flash) and faster. We
-// previously avoided it because it mangled parameter names like
-// `from1Month`, but coerceArgs() below normalises those, so Lite is back on
-// the menu — and the higher rate ceiling matters a lot for interactive chat.
-const MODEL = "gemini-2.5-flash-lite";
+// gemini-2.0-flash: free-tier, more capable than the -lite models, and far
+// more stable — 2.5-flash-lite kept returning 503 "high demand" overloads.
+// Generous free quota (15 RPM / 1500 RPD). coerceArgs() below normalises any
+// mangled parameter names, so flash-family models are safe to use.
+const MODEL = "gemini-2.0-flash";
 // Each step is one Gemini round-trip. Most questions resolve in 2–3; capping
 // lower bounds worst-case calls (easier on the free-tier rate limit) while
 // still leaving room for a tool retry or a two-part question.
