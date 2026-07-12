@@ -4,7 +4,9 @@ import { GoogleGenAI, Type } from "@google/genai";
 // gemini-2.5-flash-lite has separate (more generous) free-tier quota than
 // gemini-2.5-flash, which we burned through earlier with retry loops.
 // Quality is fine for short structured-extraction tasks like bank emails.
-const MODEL = "gemini-2.5-flash-lite";
+// gemini-2.0-flash: free-tier, stable (2.5-flash-lite was 503-ing under load),
+// and strong at the structured JSON extraction this path relies on.
+const MODEL = "gemini-2.0-flash";
 
 // Throttle between calls. With batching of up to BATCH_SIZE emails per call,
 // 4.5s between calls = ~13 calls/min × 5 emails = ~65 emails/min effective.
