@@ -96,7 +96,7 @@ export function AskChat({
    * would just hammer — which is what keeps the window saturated.
    */
   async function runAsk(userText: string, convo: Msg[]) {
-    const MAX_AUTO_RETRIES = 4;
+    const MAX_AUTO_RETRIES = 2;
     setLoading(true);
     try {
       const history = convo
@@ -127,25 +127,39 @@ export function AskChat({
         data = null;
       }
 
-      // Rate-limited → wait out the window and retry automatically.
-      if (res.status === 429 && autoRetriesRef.current < MAX_AUTO_RETRIES) {
-        autoRetriesRef.current += 1;
-        const wait = Math.max(2, Math.ceil(data?.retryAfter ?? 20)) + 1;
-        setLoading(false);
-        startCooldown(userText, convo, wait);
+      // Rate-limited. A SHORT wait is the per-minute window — auto-retry once or
+      // twice. A LONG wait (or repeated failures) means the daily free quota is
+      // spent; stop looping and say so plainly instead of trapping the user in
+      // minute-long countdowns that can't succeed today.
+      if (res.status === 429) {
+        const retryAfter = Math.ceil(data?.retryAfter ?? 20);
+        if (retryAfter <= 30 && autoRetriesRef.current < MAX_AUTO_RETRIES) {
+          autoRetriesRef.current += 1;
+          setLoading(false);
+          startCooldown(userText, convo, retryAfter + 1);
+          return;
+        }
+        autoRetriesRef.current = 0;
+        setMessages([
+          ...convo,
+          {
+            role: "assistant",
+            content:
+              "You've used up today's free Gemini quota. It resets around 1 PM IST (midnight US-Pacific) — the chat will work again after that. To use it right now, enable billing on the Google Cloud project (flash costs pennies/month).",
+            errored: true,
+          },
+        ]);
         return;
       }
 
       if (!res.ok || !data) {
         autoRetriesRef.current = 0;
         const friendly =
-          res.status === 429
-            ? "The free tier is busy right now. Give it a minute, then ask again."
-            : res.status === 504 || res.status === 408
-              ? "That took too long to answer. Try a narrower question."
-              : res.status >= 500
-                ? "The assistant hit a snag on the server. Try again in a moment."
-                : `Server returned ${res.status}.`;
+          res.status === 504 || res.status === 408
+            ? "That took too long to answer. Try a narrower question."
+            : res.status >= 500
+              ? "The assistant hit a snag on the server. Try again in a moment."
+              : `Server returned ${res.status}.`;
         setMessages([
           ...convo,
           { role: "assistant", content: data?.error ?? friendly, errored: true },
