@@ -38,11 +38,24 @@ export function AskChat({
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // Auto-retry after a rate-limit so the user can't spam Send/Retry — spamming
+  // is exactly what keeps the free-tier per-minute window saturated.
+  const [cooldown, setCooldown] = useState<number | null>(null);
+  const autoRetriesRef = useRef(0);
+  const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Auto-scroll to the bottom as messages stream in.
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, loading]);
+  }, [messages, loading, cooldown]);
+
+  // Tear down the cooldown timer if the component unmounts mid-wait.
+  useEffect(
+    () => () => {
+      if (cooldownRef.current) clearInterval(cooldownRef.current);
+    },
+    []
+  );
 
   /** Find the most recent user message that hasn't yet got a successful reply. */
   function lastUserMessage(): string | null {
@@ -55,73 +68,92 @@ export function AskChat({
   /** Re-send the last user message after dropping the errored assistant reply. */
   async function retryLast() {
     const last = lastUserMessage();
-    if (!last || loading) return;
-    // Drop the last assistant message (the error) so the retry doesn't see it.
-    let trimmed = [...messages];
-    if (trimmed.length > 0 && trimmed[trimmed.length - 1].role === "assistant") {
-      trimmed = trimmed.slice(0, -1);
+    if (!last || loading || cooldown !== null) return;
+    let convo = [...messages];
+    // Drop a trailing errored assistant reply; convo then ends with the user msg.
+    if (convo.length > 0 && convo[convo.length - 1].role === "assistant") {
+      convo = convo.slice(0, -1);
     }
-    // Drop the trailing user message too — `send` will re-add it.
-    if (trimmed.length > 0 && trimmed[trimmed.length - 1].role === "user") {
-      trimmed = trimmed.slice(0, -1);
-    }
-    setMessages(trimmed);
-    // Wait a tick so React commits before we mutate again.
-    await new Promise((r) => setTimeout(r, 0));
-    await send(last);
+    setMessages(convo);
+    autoRetriesRef.current = 0;
+    await runAsk(last, convo);
   }
 
   async function send(text: string) {
     const trimmed = text.trim();
-    if (!trimmed || loading) return;
-    const userMsg: Msg = { role: "user", content: trimmed };
-    const nextMessages = [...messages, userMsg];
-    setMessages(nextMessages);
+    if (!trimmed || loading || cooldown !== null) return;
+    autoRetriesRef.current = 0;
+    const convo: Msg[] = [...messages, { role: "user", content: trimmed }];
+    setMessages(convo);
     setInput("");
-    setLoading(true);
+    await runAsk(trimmed, convo);
+  }
 
+  /**
+   * Fire one request for `userText`. `convo` is the full thread INCLUDING the
+   * trailing user message. On a rate-limit we wait out the countdown and retry
+   * automatically (up to a cap) instead of showing a Retry button the user
+   * would just hammer — which is what keeps the window saturated.
+   */
+  async function runAsk(userText: string, convo: Msg[]) {
+    const MAX_AUTO_RETRIES = 4;
+    setLoading(true);
     try {
+      const history = convo
+        .slice(0, -1) // everything before the current question
+        .filter((m) => !m.errored)
+        .map((m) => ({ role: m.role, content: m.content }));
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: trimmed,
-          history: messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-        }),
+        body: JSON.stringify({ message: userText, history }),
       });
-      // Read as text first: a timed-out or crashed function returns an HTML /
-      // plain-text platform error page, not JSON. res.json() would throw a
-      // cryptic "Unexpected token 'A'…" — parse defensively instead.
+      // Read as text first: a timed-out/crashed function returns an HTML/plain
+      // error page, not JSON — parse defensively so we don't throw a cryptic
+      // "Unexpected token 'A'…".
       const raw = await res.text();
       let data:
-        | { error?: string; answer?: string; trace?: TraceEntry[]; steps?: number }
+        | {
+            error?: string;
+            answer?: string;
+            trace?: TraceEntry[];
+            steps?: number;
+            retryAfter?: number;
+          }
         | null = null;
       try {
         data = raw ? JSON.parse(raw) : null;
       } catch {
         data = null;
       }
+
+      // Rate-limited → wait out the window and retry automatically.
+      if (res.status === 429 && autoRetriesRef.current < MAX_AUTO_RETRIES) {
+        autoRetriesRef.current += 1;
+        const wait = Math.max(2, Math.ceil(data?.retryAfter ?? 20)) + 1;
+        setLoading(false);
+        startCooldown(userText, convo, wait);
+        return;
+      }
+
       if (!res.ok || !data) {
+        autoRetriesRef.current = 0;
         const friendly =
-          res.status === 504 || res.status === 408
-            ? "That took too long to answer. Try a narrower question and ask again."
-            : res.status >= 500
-              ? "The assistant hit a snag on the server. Give it a moment and try again."
-              : `Server returned ${res.status}.`;
+          res.status === 429
+            ? "The free tier is busy right now. Give it a minute, then ask again."
+            : res.status === 504 || res.status === 408
+              ? "That took too long to answer. Try a narrower question."
+              : res.status >= 500
+                ? "The assistant hit a snag on the server. Try again in a moment."
+                : `Server returned ${res.status}.`;
         setMessages([
-          ...nextMessages,
-          {
-            role: "assistant",
-            content: data?.error ?? friendly,
-            errored: true,
-          },
+          ...convo,
+          { role: "assistant", content: data?.error ?? friendly, errored: true },
         ]);
       } else {
+        autoRetriesRef.current = 0;
         setMessages([
-          ...nextMessages,
+          ...convo,
           {
             role: "assistant",
             content: data.answer ?? "I don't have an answer for that.",
@@ -131,8 +163,9 @@ export function AskChat({
         ]);
       }
     } catch (e) {
+      autoRetriesRef.current = 0;
       setMessages([
-        ...nextMessages,
+        ...convo,
         {
           role: "assistant",
           content: e instanceof Error ? e.message : String(e),
@@ -141,9 +174,28 @@ export function AskChat({
       ]);
     } finally {
       setLoading(false);
-      // Refocus the textarea once the answer arrives.
       requestAnimationFrame(() => inputRef.current?.focus());
     }
+  }
+
+  /** Count down `seconds`, then auto-resend. Input stays locked meanwhile. */
+  function startCooldown(userText: string, convo: Msg[], seconds: number) {
+    let remaining = seconds;
+    setCooldown(remaining);
+    if (cooldownRef.current) clearInterval(cooldownRef.current);
+    cooldownRef.current = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        if (cooldownRef.current) {
+          clearInterval(cooldownRef.current);
+          cooldownRef.current = null;
+        }
+        setCooldown(null);
+        void runAsk(userText, convo);
+      } else {
+        setCooldown(remaining);
+      }
+    }, 1000);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -165,7 +217,7 @@ export function AskChat({
           <EmptyState
             categories={categories}
             onExample={(q) => send(q)}
-            disabled={loading}
+            disabled={loading || cooldown !== null}
           />
         ) : (
           messages.map((m, i) => {
@@ -191,6 +243,15 @@ export function AskChat({
             </span>
           </div>
         ) : null}
+        {cooldown !== null ? (
+          <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            <span className="inline-flex items-center gap-2">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+              Free tier is busy — retrying automatically in {cooldown}s… (no quota
+              lost)
+            </span>
+          </div>
+        ) : null}
         <div ref={endRef} />
       </div>
 
@@ -209,16 +270,16 @@ export function AskChat({
           placeholder="Ask about your spending…"
           rows={1}
           className="input min-h-[44px] max-h-32 flex-1 resize-none"
-          disabled={loading}
+          disabled={loading || cooldown !== null}
           autoFocus
         />
         <button
           type="submit"
           className="btn-primary"
-          disabled={loading || !input.trim()}
+          disabled={loading || cooldown !== null || !input.trim()}
           aria-label="Send"
         >
-          {loading ? "…" : "Send"}
+          {loading || cooldown !== null ? "…" : "Send"}
         </button>
       </form>
     </div>
