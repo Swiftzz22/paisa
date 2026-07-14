@@ -145,7 +145,7 @@ export function AskChat({
           {
             role: "assistant",
             content:
-              "You've used up today's free Gemini quota. It resets around 1 PM IST (midnight US-Pacific) — the chat will work again after that. To use it right now, enable billing on the Google Cloud project (flash costs pennies/month).",
+              "The chat is rate-limited right now. Give it a minute and ask again.",
             errored: true,
           },
         ]);

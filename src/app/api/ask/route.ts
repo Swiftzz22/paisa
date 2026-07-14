@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
     if (e instanceof GeminiRateLimitError) {
       return Response.json(
         {
-          error: `Gemini rate-limited. Try again in ${e.retryAfterSeconds}s — no quota was lost.`,
+          error: `The chat is rate-limited. Try again in ${e.retryAfterSeconds}s.`,
           retryAfter: e.retryAfterSeconds,
         },
         { status: 429 }

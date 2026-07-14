@@ -1,8 +1,7 @@
 import "server-only";
-import { GoogleGenAI } from "@google/genai";
-import type { Content, Part } from "@google/genai";
 import { AGENT_TOOLS, getContext } from "@/lib/agent/tools";
 import { FUNCTION_DECLARATIONS } from "@/lib/agent/declarations";
+import { GeminiRateLimitError } from "@/lib/email/parser";
 
 /** Map tool name → array of expected canonical parameter names. */
 const EXPECTED_KEYS: Record<string, readonly string[]> = Object.fromEntries(
@@ -11,18 +10,15 @@ const EXPECTED_KEYS: Record<string, readonly string[]> = Object.fromEntries(
     d.parameters?.properties ? Object.keys(d.parameters.properties) : [],
   ])
 );
-import { callGeminiWithBackoff } from "@/lib/email/parser";
 
-// gemini-2.0-flash: free-tier, more capable than the -lite models, and far
-// more stable — 2.5-flash-lite kept returning 503 "high demand" overloads.
-// Generous free quota (15 RPM / 1500 RPD). coerceArgs() below normalises any
-// mangled parameter names, so flash-family models are safe to use.
-const MODEL = "gemini-2.0-flash";
-// Each step is one Gemini round-trip. Most questions resolve in 2–3; capping
-// lower bounds worst-case calls (easier on the free-tier rate limit) while
-// still leaving room for a tool retry or a two-part question.
+// NVIDIA's build platform exposes an OpenAI-compatible endpoint. meta's
+// llama-3.3-70b-instruct is free and supports function/tool calling, which the
+// agent relies on. Get a key (nvapi-…) at https://build.nvidia.com.
+const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const MODEL = "meta/llama-3.3-70b-instruct";
+// Each step is one model round-trip. Most questions resolve in 2–3.
 const MAX_STEPS = 5;
-/** Hard cap on the JSON size of a tool result before going back to the LLM. */
+/** Hard cap on the JSON size of a tool result before going back to the model. */
 const MAX_RESULT_BYTES = 50_000;
 
 export type TraceEntry = {
@@ -59,8 +55,8 @@ type DateAnchors = {
 
 /**
  * Pre-compute concrete date ranges in IST so the model never has to do date
- * arithmetic (flash-lite is unreliable at "what date was last Monday?"). India
- * has no DST, so IST is a fixed UTC+5:30 offset.
+ * arithmetic (small models are unreliable at "what date was last Monday?").
+ * India has no DST, so IST is a fixed UTC+5:30 offset.
  */
 function computeDateAnchors(now: Date = new Date()): DateAnchors {
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -144,6 +140,7 @@ TOOL CALL DISCIPLINE:
 - Use the EXACT parameter names from the schemas (monthlyTotals takes "fromMonth"/"toMonth" — not "from1Month" or "from_month").
 - If a tool returns a parameter error, READ it, fix the name/value, and CALL AGAIN. You have up to ${MAX_STEPS} steps — spend them recovering, don't give up after one failed call.
 - Dates are YYYY-MM-DD, months YYYY-MM. Never include a time.
+- When you have enough data to answer, reply in plain text with NO further tool calls.
 
 WORKED EXAMPLES:
 - "biggest UPI transaction this week" → queryTransactions({ type:"debit", paymentMode:"upi", from:"${weekStart}", to:"${a.today}", limit:1 })
@@ -157,21 +154,10 @@ If a question truly can't be answered with the tools, say so plainly rather than
 }
 
 /**
- * Coerce LLM-supplied argument names to the canonical names the tool expects.
- *
- * Real-world failure we hit: gemini-2.5-flash repeatedly emits "from1Month"
- * instead of "fromMonth" for `monthlyTotals`, and prompt nudges don't fix it
- * — the typo's in the model's weights. Rather than fight it, we normalise
- * each incoming key (lowercase + strip non-letters) and match it against the
- * canonical schema keys with the same normalisation.
- *
- *   "fromMonth"   → "frommonth"
- *   "from1Month"  → "frommonth"   ✓ unifies with the canonical
- *   "from_month"  → "frommonth"   ✓
- *   "monthFrom"   → "monthfrom"   ✗ doesn't match — left alone, will Zod-fail
- *
- * If two incoming keys normalise to the same canonical key, we keep the first
- * one (don't try to be clever about merging).
+ * Coerce model-supplied argument names to the canonical names the tool expects.
+ * Small models sometimes emit "from_month" / "from1Month" instead of
+ * "fromMonth"; normalise each key (lowercase + strip non-letters) and match it
+ * against the canonical schema keys under the same normalisation.
  */
 function coerceArgs(
   args: Record<string, unknown>,
@@ -184,7 +170,6 @@ function coerceArgs(
   const out: Record<string, unknown> = {};
   for (const [incoming, value] of Object.entries(args)) {
     if (canonicalSet.has(incoming)) {
-      // Already a canonical key — preserve.
       out[incoming] = value;
       continue;
     }
@@ -195,25 +180,10 @@ function coerceArgs(
   return out;
 }
 
-/**
- * Prep a tool result for Gemini's functionResponse.response field.
- *
- *   • Gemini's proto requires `response` to be an object, not an array — so
- *     bare arrays get wrapped under `{ rows: [...] }`.
- *   • Then truncate the JSON serialisation if it's larger than the cap so a
- *     runaway query can't blow the LLM's context window.
- */
-function prepResponse(value: unknown): Record<string, unknown> {
-  let normalised: unknown = value;
-  if (Array.isArray(value)) normalised = { rows: value };
-  else if (value === null || typeof value !== "object") {
-    normalised = { value };
-  }
-  const json = JSON.stringify(normalised);
-  if (json.length <= MAX_RESULT_BYTES) {
-    return normalised as Record<string, unknown>;
-  }
-  // Truncate. Return a marker object so the LLM knows what happened.
+/** Truncate an oversized tool result so a runaway query can't blow the context. */
+function prepResult(value: unknown): unknown {
+  const json = JSON.stringify(value ?? null);
+  if (json.length <= MAX_RESULT_BYTES) return value ?? null;
   return {
     _truncated: true,
     _originalBytes: json.length,
@@ -222,29 +192,99 @@ function prepResponse(value: unknown): Record<string, unknown> {
   };
 }
 
+// ---- NVIDIA (OpenAI-compatible) tool schema + client ----------------------
+
+/** Recursively lower-case JSON-Schema `type` values (Gemini uses UPPERCASE). */
+function toJsonSchema(node: unknown): unknown {
+  if (!node || typeof node !== "object") return node;
+  const src = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(src)) {
+    if (k === "type" && typeof v === "string") {
+      out[k] = v.toLowerCase();
+    } else if (k === "properties" && v && typeof v === "object") {
+      out[k] = Object.fromEntries(
+        Object.entries(v as Record<string, unknown>).map(([pk, pv]) => [
+          pk,
+          toJsonSchema(pv),
+        ])
+      );
+    } else if (k === "items") {
+      out[k] = toJsonSchema(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+const OPENAI_TOOLS = FUNCTION_DECLARATIONS.map((d) => ({
+  type: "function" as const,
+  function: {
+    name: d.name,
+    description: d.description,
+    parameters: toJsonSchema(d.parameters),
+  },
+}));
+
+type ToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+type ChatMsg =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+async function nvidiaChat(
+  apiKey: string,
+  messages: ChatMsg[]
+): Promise<{ content: string | null; toolCalls: ToolCall[] }> {
+  const res = await fetch(NVIDIA_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      messages,
+      tools: OPENAI_TOOLS,
+      temperature: 0,
+      max_tokens: 1024,
+    }),
+  });
+  if (res.status === 429) {
+    const ra = Number(res.headers.get("retry-after")) || 20;
+    throw new GeminiRateLimitError(ra); // reuse: the UI auto-retries on this
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`NVIDIA API ${res.status}: ${text.slice(0, 400)}`);
+  }
+  const data = await res.json();
+  const msg = data?.choices?.[0]?.message ?? {};
+  return { content: msg.content ?? null, toolCalls: msg.tool_calls ?? [] };
+}
+
 /**
- * Run one agent turn. Loops the LLM + tool execution until the model emits a
- * text-only response or we hit MAX_STEPS.
- *
- * Conversation history is passed in as plain {role, content} pairs — past
- * tool calls are NOT replayed (saves prompt tokens). The agent can re-call
- * tools if it needs to.
+ * Run one agent turn. Loops the model + tool execution until it emits a
+ * text-only response or we hit MAX_STEPS. History is plain {role, content}
+ * pairs — past tool calls are not replayed.
  */
 export async function runAgentLoop(params: {
   userId: string;
   history: ChatMessage[];
   userMessage: string;
 }): Promise<AgentResult> {
-  const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+  const apiKey = process.env.NVIDIA_API_KEY;
   if (!apiKey) {
     throw new Error(
-      "GOOGLE_GEMINI_API_KEY is not set. Get one at https://aistudio.google.com/apikey"
+      "NVIDIA_API_KEY is not set. Get a free key at https://build.nvidia.com"
     );
   }
-  const ai = new GoogleGenAI({ apiKey });
 
-  // Resolve context up front and bake it into the system prompt — saves a
-  // tool call per session.
   const ctx = await getContext(params.userId);
   const systemPrompt = buildSystemPrompt(
     {
@@ -255,46 +295,22 @@ export async function runAgentLoop(params: {
     computeDateAnchors()
   );
 
-  // Build the Contents array. Each ChatMessage becomes one Content turn.
-  const contents: Content[] = params.history.map((m) => ({
-    role: m.role === "user" ? "user" : "model",
-    parts: [{ text: m.content }],
-  }));
-  contents.push({
-    role: "user",
-    parts: [{ text: params.userMessage }],
-  });
+  const messages: ChatMsg[] = [{ role: "system", content: systemPrompt }];
+  for (const m of params.history) {
+    messages.push({
+      role: m.role === "user" ? "user" : "assistant",
+      content: m.content,
+    });
+  }
+  messages.push({ role: "user", content: params.userMessage });
 
   const trace: TraceEntry[] = [];
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const response = await callGeminiWithBackoff(
-      () =>
-        ai.models.generateContent({
-          model: MODEL,
-          contents,
-          config: {
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            tools: [{ functionDeclarations: FUNCTION_DECLARATIONS as unknown as never }],
-            temperature: 0,
-          },
-        }),
-      // Interactive path: this loop makes several sequential calls, so the
-      // 4.5s batch throttle would alone blow the function timeout. Use a light
-      // gap, and fail fast on a 429 (surface "try again" in ~1s instead of
-      // sleeping ~90s and 504-ing).
-      { maxAttempts: 1, minIntervalMs: 400 }
-    );
+    const reply = await nvidiaChat(apiKey, messages);
 
-    const candidate = response.candidates?.[0];
-    const parts: Part[] = candidate?.content?.parts ?? [];
-    const functionCalls = parts
-      .map((p) => p.functionCall)
-      .filter((fc): fc is NonNullable<typeof fc> => Boolean(fc));
-
-    if (functionCalls.length === 0) {
-      // Final text answer.
-      const text = response.text?.trim();
+    if (reply.toolCalls.length === 0) {
+      const text = (reply.content ?? "").trim();
       return {
         answer: text || "I don't have an answer for that.",
         trace,
@@ -302,67 +318,60 @@ export async function runAgentLoop(params: {
       };
     }
 
-    // Append the model's function-call turn verbatim.
-    contents.push({
-      role: "model",
-      parts: parts.map((p) => {
-        if (p.functionCall) return { functionCall: p.functionCall };
-        if (p.text) return { text: p.text };
-        return p;
-      }),
+    // Record the assistant's tool-call turn, then answer each call.
+    messages.push({
+      role: "assistant",
+      content: reply.content ?? null,
+      tool_calls: reply.toolCalls,
     });
 
-    // Execute each call, gather results, send back as a single user turn.
-    const responseParts: Part[] = [];
-    for (const call of functionCalls) {
-      const name = call.name as keyof typeof AGENT_TOOLS;
-      const rawArgs = (call.args ?? {}) as Record<string, unknown>;
+    for (const call of reply.toolCalls) {
+      const name = call.function.name as keyof typeof AGENT_TOOLS;
+      let rawArgs: Record<string, unknown> = {};
+      try {
+        rawArgs = call.function.arguments
+          ? (JSON.parse(call.function.arguments) as Record<string, unknown>)
+          : {};
+      } catch {
+        rawArgs = {};
+      }
       const expected = EXPECTED_KEYS[name as string] ?? [];
       const args = coerceArgs(rawArgs, expected);
       const tool = AGENT_TOOLS[name];
       const t0 = performance.now();
+      let responseObj: unknown;
+
       if (!tool) {
         const error = `Unknown tool: ${String(name)}`;
         trace.push({ name: String(name), args, error, ms: 0 });
-        responseParts.push({
-          functionResponse: {
-            name: String(name),
-            response: { error },
-          },
-        });
-        continue;
+        responseObj = { error };
+      } else {
+        try {
+          const result = await (name === "getContext"
+            ? (tool.run as unknown as (uid: string) => Promise<unknown>)(
+                params.userId
+              )
+            : (tool.run as unknown as (
+                uid: string,
+                a: unknown
+              ) => Promise<unknown>)(params.userId, args));
+          const ms = Math.round(performance.now() - t0);
+          trace.push({ name: String(name), args, result, ms });
+          responseObj = prepResult(result);
+        } catch (e) {
+          const ms = Math.round(performance.now() - t0);
+          const error = e instanceof Error ? e.message : String(e);
+          trace.push({ name: String(name), args, error, ms });
+          responseObj = { error };
+        }
       }
-      try {
-        // getContext takes no args (userId only); others take args.
-        const result = await (name === "getContext"
-          ? (tool.run as unknown as (uid: string) => Promise<unknown>)(
-              params.userId
-            )
-          : (tool.run as unknown as (
-              uid: string,
-              a: unknown
-            ) => Promise<unknown>)(params.userId, args));
-        const ms = Math.round(performance.now() - t0);
-        trace.push({ name: String(name), args, result, ms });
-        responseParts.push({
-          functionResponse: {
-            name: String(name),
-            response: prepResponse(result),
-          },
-        });
-      } catch (e) {
-        const ms = Math.round(performance.now() - t0);
-        const error = e instanceof Error ? e.message : String(e);
-        trace.push({ name: String(name), args, error, ms });
-        responseParts.push({
-          functionResponse: {
-            name: String(name),
-            response: { error },
-          },
-        });
-      }
+
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: JSON.stringify(responseObj),
+      });
     }
-    contents.push({ role: "user", parts: responseParts });
   }
 
   return {
