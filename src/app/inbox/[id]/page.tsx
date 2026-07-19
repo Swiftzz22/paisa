@@ -60,9 +60,14 @@ export default async function InboxDetailPage({
           <h2 className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
             HTML body (rendered)
           </h2>
-          <div
-            className="rounded-md border border-zinc-200 bg-white p-3 text-sm dark:border-zinc-800 dark:bg-zinc-950"
-            dangerouslySetInnerHTML={{ __html: email.rawHtml }}
+          {/* Untrusted email HTML — render in a fully sandboxed iframe
+              (sandbox="" disables scripts, forms, and same-origin access) so a
+              crafted email can't run code in the user's session. */}
+          <iframe
+            title="Email HTML body"
+            sandbox=""
+            srcDoc={email.rawHtml}
+            className="h-96 w-full rounded-md border border-zinc-200 bg-white dark:border-zinc-800"
           />
           <details className="mt-3">
             <summary className="cursor-pointer text-xs text-zinc-500">
