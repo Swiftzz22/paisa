@@ -216,19 +216,18 @@ export default async function EmailSettingsPage({
 
           {!geminiReady ? (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-              <strong>Gemini API key not set.</strong> Fetching will store
-              emails but won&apos;t auto-create expenses until you set{" "}
-              <code className="font-mono">GOOGLE_GEMINI_API_KEY</code> in{" "}
-              <code className="font-mono">.env</code>. Get one at{" "}
+              <strong>AI key not set.</strong> Fetching will store emails but
+              won&apos;t auto-create expenses until you set{" "}
+              <code className="font-mono">NVIDIA_API_KEY</code>. Get one free at{" "}
               <a
-                href="https://aistudio.google.com/apikey"
+                href="https://build.nvidia.com"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline"
               >
-                aistudio.google.com/apikey
-              </a>{" "}
-              — free tier, no billing.
+                build.nvidia.com
+              </a>
+              .
             </div>
           ) : (
             <p className="text-xs text-zinc-500 dark:text-zinc-400">

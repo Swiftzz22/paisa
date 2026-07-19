@@ -98,7 +98,7 @@ export default async function InboxPage({
       ) : null}
       {params.status === "ratelimited" ? (
         <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-          <strong>Paused — Gemini rate limit.</strong>
+          <strong>Paused — AI rate limit.</strong>
           {` Got through ${params.parsed ?? "0"} parsed and ${params.ignored ?? "0"} ignored on this run. The rest stay pending — they'll be picked up by the background sync (or click "Parse pending" again in ~${params.retry ?? "60"}s). No work is lost.`}
         </div>
       ) : null}

@@ -1,12 +1,12 @@
 import "server-only";
-import { GoogleGenAI, Type } from "@google/genai";
 
-// gemini-2.5-flash-lite has separate (more generous) free-tier quota than
-// gemini-2.5-flash, which we burned through earlier with retry loops.
-// Quality is fine for short structured-extraction tasks like bank emails.
-// gemini-2.0-flash: free-tier, stable (2.5-flash-lite was 503-ing under load),
-// and strong at the structured JSON extraction this path relies on.
-const MODEL = "gemini-2.0-flash";
+// Email extraction + recategorize run on NVIDIA's free OpenAI-compatible API
+// (build.nvidia.com), the same place the chat moved to — Gemini's free tier
+// kept rate-limiting. The statement importers still use Gemini directly
+// (multimodal PDF/image) and bring their own client + callGeminiWithBackoff.
+const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const NVIDIA_MODEL = "meta/llama-3.1-8b-instruct";
+const NVIDIA_TIMEOUT_MS = 45_000;
 
 // Throttle between calls. With batching of up to BATCH_SIZE emails per call,
 // 4.5s between calls = ~13 calls/min × 5 emails = ~65 emails/min effective.
@@ -121,18 +121,86 @@ export type CategoryChoice = {
   id: string;
 };
 
-function getClient(): GoogleGenAI {
-  const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      "GOOGLE_GEMINI_API_KEY is not set. Get one at https://aistudio.google.com/apikey"
-    );
-  }
-  return new GoogleGenAI({ apiKey });
+export function isGeminiConfigured(): boolean {
+  // Email extraction + recategorize now run on NVIDIA (build.nvidia.com), so
+  // this checks the NVIDIA key. (Name kept so the 5 call sites don't churn.)
+  return Boolean(process.env.NVIDIA_API_KEY);
 }
 
-export function isGeminiConfigured(): boolean {
-  return Boolean(process.env.GOOGLE_GEMINI_API_KEY);
+/**
+ * Call NVIDIA (OpenAI-compatible) in JSON mode and return the array of results.
+ * We ask the model for `{ "results": [...] }` and unwrap it. Throws
+ * GeminiRateLimitError on 429 so callers keep their rate-limit handling.
+ */
+async function nvidiaJsonArray(
+  systemPrompt: string,
+  userContent: string
+): Promise<unknown[]> {
+  const apiKey = process.env.NVIDIA_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "NVIDIA_API_KEY is not set. Get a free key at https://build.nvidia.com"
+    );
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), NVIDIA_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(NVIDIA_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: NVIDIA_MODEL,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0,
+        max_tokens: 4096,
+        response_format: { type: "json_object" },
+      }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `NVIDIA request timed out after ${NVIDIA_TIMEOUT_MS / 1000}s.`
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (res.status === 429) {
+    const ra = Number(res.headers.get("retry-after")) || 20;
+    throw new GeminiRateLimitError(ra);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`NVIDIA API ${res.status}: ${text.slice(0, 400)}`);
+  }
+  const data = await res.json();
+  const content: string = data?.choices?.[0]?.message?.content ?? "";
+  if (!content) throw new Error("NVIDIA returned no content.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    const cleaned = content
+      .replace(/^```(?:json)?/i, "")
+      .replace(/```$/, "")
+      .trim();
+    parsed = JSON.parse(cleaned);
+  }
+  if (Array.isArray(parsed)) return parsed;
+  const obj = (parsed ?? {}) as Record<string, unknown>;
+  for (const key of ["results", "transactions", "items", "data"]) {
+    if (Array.isArray(obj[key])) return obj[key] as unknown[];
+  }
+  return [parsed];
 }
 
 const BASE_PROMPT = `You are extracting Indian bank, UPI, or credit/debit card transaction
@@ -176,48 +244,10 @@ Rules for category_label (pick exactly one label from the list, character-for-ch
    * Money from a family member → "Income › Allowance".
    * Anything else → "Income › Other".
 
-Output: a JSON array. Each element includes the email_id from the input plus
-the extracted fields. The array length MUST equal the number of input emails.`;
-
-function buildItemSchema(labels: string[]) {
-  return {
-    type: Type.OBJECT,
-    properties: {
-      email_id: { type: Type.STRING },
-      is_transaction: { type: Type.BOOLEAN },
-      kind: {
-        type: Type.STRING,
-        enum: ["debit", "credit"],
-      },
-      amount_inr: { type: Type.NUMBER, nullable: true },
-      merchant: { type: Type.STRING, nullable: true },
-      payment_mode: {
-        type: Type.STRING,
-        enum: ["card", "upi", "bank_transfer"],
-        nullable: true,
-      },
-      transacted_at: { type: Type.STRING, nullable: true },
-      note: { type: Type.STRING, nullable: true },
-      category_label: {
-        type: Type.STRING,
-        enum: labels,
-        nullable: true,
-      },
-    },
-    required: ["email_id", "is_transaction", "kind"],
-    propertyOrdering: [
-      "email_id",
-      "is_transaction",
-      "kind",
-      "amount_inr",
-      "merchant",
-      "payment_mode",
-      "transacted_at",
-      "note",
-      "category_label",
-    ],
-  };
-}
+Output: a JSON object with a single key "results" whose value is an array —
+one object per input email, in the same order. Each element includes the
+email_id from the input plus the extracted fields. The results array length
+MUST equal the number of input emails. payment_mode and kind are lowercase.`;
 
 /**
  * Extract transaction details from a batch of emails in one Gemini call.
@@ -229,12 +259,7 @@ export async function extractTransactionBatch(params: {
 }): Promise<Map<string, ExtractedTransaction>> {
   if (params.emails.length === 0) return new Map();
 
-  const ai = getClient();
   const labels = params.categories.map((c) => c.label);
-  const schema = {
-    type: Type.ARRAY,
-    items: buildItemSchema(labels),
-  };
 
   const emailsBlock = params.emails
     .map((e, i) => {
@@ -258,41 +283,31 @@ export async function extractTransactionBatch(params: {
     labels.join("\n"),
   ].join("\n");
 
-  const response = await callGeminiWithBackoff(() =>
-    ai.models.generateContent({
-      model: MODEL,
-      contents: [
-        { role: "user", parts: [{ text: BASE_PROMPT + "\n\n" + userContent }] },
-      ],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-        temperature: 0,
-      },
-    })
-  );
-
-  const text = response.text;
-  if (!text) throw new Error("Gemini returned no content.");
-
-  const rawArray = JSON.parse(text) as BatchExtraction[];
-  if (!Array.isArray(rawArray)) {
-    throw new Error("Gemini returned a non-array response.");
-  }
+  const rawArray = (await nvidiaJsonArray(
+    BASE_PROMPT,
+    userContent
+  )) as BatchExtraction[];
 
   const out = new Map<string, ExtractedTransaction>();
   for (const item of rawArray) {
     if (!item || typeof item.email_id !== "string") continue;
+    const pm =
+      typeof item.payment_mode === "string"
+        ? item.payment_mode.toLowerCase()
+        : null;
     const cleaned: ExtractedTransaction = {
       is_transaction: Boolean(item.is_transaction),
       amount_inr: item.amount_inr ?? null,
       merchant: item.merchant ?? null,
-      payment_mode: item.payment_mode ?? null,
+      payment_mode:
+        pm === "upi" || pm === "card" || pm === "bank_transfer" ? pm : null,
       transacted_at: item.transacted_at ?? null,
       note: item.note ?? null,
       category_label: item.category_label ?? null,
       kind:
-        (item as { kind?: string }).kind === "credit" ? "credit" : "debit",
+        String((item as { kind?: string }).kind).toLowerCase() === "credit"
+          ? "credit"
+          : "debit",
     };
     if (cleaned.is_transaction) {
       if (typeof cleaned.amount_inr !== "number" || !(cleaned.amount_inr > 0)) {
@@ -318,20 +333,7 @@ export async function categorizeMerchantBatch(params: {
   categories: CategoryChoice[];
 }): Promise<Map<string, string>> {
   if (params.merchants.length === 0) return new Map();
-  const ai = getClient();
   const labels = params.categories.map((c) => c.label);
-
-  const schema = {
-    type: Type.ARRAY,
-    items: {
-      type: Type.OBJECT,
-      properties: {
-        merchant: { type: Type.STRING },
-        category_label: { type: Type.STRING, enum: labels },
-      },
-      required: ["merchant", "category_label"],
-    },
-  };
 
   const prompt = `You're categorizing Indian merchant names into the user's
 expense categories. For each merchant below, pick exactly one label from the
@@ -346,8 +348,9 @@ Rules:
 - For brands like Spotify/Netflix → "Subscriptions › Streaming".
 - Default to "Misc" only if you truly cannot tell.
 
-Return one entry per input merchant, in the same order, using the exact
-merchant string as provided.`;
+Return a JSON object with a single key "results" whose value is an array with
+one entry per input merchant, in the same order — each entry
+{ "merchant": <exact input string>, "category_label": <one label> }.`;
 
   const userContent = [
     "Merchants:",
@@ -357,29 +360,9 @@ merchant string as provided.`;
     labels.join("\n"),
   ].join("\n");
 
-  // Recategorize is triggered by a user click (a server action under a 60s
-  // cap). Fail fast on a rate-limit — sleeping the patient ~90s×3 backoff here
-  // would blow the timeout and 500 the page. The caller catches
-  // GeminiRateLimitError and reports "rate-limited, try again" gracefully.
-  const response = await callGeminiWithBackoff(
-    () =>
-      ai.models.generateContent({
-        model: MODEL,
-        contents: [
-          { role: "user", parts: [{ text: prompt + "\n\n" + userContent }] },
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: schema,
-          temperature: 0,
-        },
-      }),
-    { maxAttempts: 1, minIntervalMs: 400 }
-  );
-  const text = response.text;
-  if (!text) throw new Error("Gemini returned no content for category batch.");
-
-  const arr = JSON.parse(text) as Array<{
+  // nvidiaJsonArray fails fast on a 429 (throws GeminiRateLimitError), which the
+  // recategorize caller reports gracefully.
+  const arr = (await nvidiaJsonArray(prompt, userContent)) as Array<{
     merchant: string;
     category_label: string;
   }>;
