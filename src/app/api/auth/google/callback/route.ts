@@ -37,9 +37,11 @@ export async function GET(req: Request) {
     if (loginState !== state) return fail("Sign-in state mismatch. Try again.");
     try {
       const identity = await exchangeLoginCode(code);
-      const { id: userId } = await resolveUserForLogin(identity);
+      const { id: userId, isNew } = await resolveUserForLogin(identity);
       await createSession(userId);
-      return NextResponse.redirect(new URL("/", url.origin));
+      // First-time users land on a short onboarding screen; returning users
+      // go straight to their dashboard.
+      return NextResponse.redirect(new URL(isNew ? "/welcome" : "/", url.origin));
     } catch (e) {
       console.error("[login callback] failed:", e);
       return fail(e instanceof Error ? e.message : String(e));
