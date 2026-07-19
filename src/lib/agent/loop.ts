@@ -11,11 +11,12 @@ const EXPECTED_KEYS: Record<string, readonly string[]> = Object.fromEntries(
   ])
 );
 
-// NVIDIA's build platform exposes an OpenAI-compatible endpoint. meta's
-// llama-3.3-70b-instruct is free and supports function/tool calling, which the
-// agent relies on. Get a key (nvapi-…) at https://build.nvidia.com.
+// NVIDIA's build platform exposes an OpenAI-compatible endpoint. Get a key
+// (nvapi-…) at https://build.nvidia.com. llama-3.1-70b-instruct is free, fast
+// (~1.5s), and does clean OpenAI-format tool calling — verified directly.
+// (Note: 3.3-70b currently times out on the free tier; 3.1-70b is the pick.)
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const MODEL = "meta/llama-3.3-70b-instruct";
+const MODEL = "meta/llama-3.1-70b-instruct";
 // Each step is one model round-trip. Most questions resolve in 2–3.
 const MAX_STEPS = 5;
 /** Hard cap on the JSON size of a tool result before going back to the model. */

@@ -70,7 +70,7 @@ export const queryTransactionsSchema = z.object({
   type: TxType.optional().describe(
     "'debit' for spending or 'credit' for money received."
   ),
-  limit: z
+  limit: z.coerce
     .number()
     .int()
     .positive()
@@ -224,7 +224,7 @@ export const aggregateByMerchantSchema = z.object({
   from: ISODate.describe("Range start, YYYY-MM-DD (inclusive)."),
   to: ISODate.describe("Range end, YYYY-MM-DD (inclusive)."),
   type: TxType.optional().describe("Default 'debit'."),
-  limit: z
+  limit: z.coerce
     .number()
     .int()
     .positive()
