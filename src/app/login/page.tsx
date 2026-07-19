@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth/session";
 import { isLoginConfigured } from "@/lib/auth/google-login";
+import { PasskeyLoginButton } from "@/components/PasskeyLoginButton";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,17 @@ export default async function LoginPage({
             in <code className="font-mono text-xs">.env</code>, then restart.
           </div>
         )}
+
+        {/* Passkey sign-in — works once you've added one under Settings →
+            Passkeys (after signing in with Google the first time). */}
+        <div className="mt-4">
+          <div className="mb-3 flex items-center gap-3 text-[11px] uppercase tracking-wide text-zinc-400">
+            <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+            or
+            <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+          </div>
+          <PasskeyLoginButton />
+        </div>
 
         <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-500">
           We only read your name and email to identify your account. Connecting

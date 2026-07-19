@@ -522,6 +522,13 @@ export async function createCategoryInlineAction(
   return { id: created.id, label: created.name };
 }
 
+/** Remove a passkey. Scoped to the current user so nobody can delete another's. */
+export async function deletePasskeyAction(id: string) {
+  const user = await getCurrentUser();
+  await prisma.passkey.deleteMany({ where: { id, userId: user.id } });
+  revalidatePath("/settings/passkeys");
+}
+
 export async function archiveCategoryAction(id: string) {
   const user = await getCurrentUser();
   await prisma.category.updateMany({

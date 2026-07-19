@@ -34,6 +34,12 @@ const TILES: Array<{
       "Connect Gmail, run background sync, upload bank statements (HDFC .xls, HSBC .pdf).",
   },
   {
+    href: "/settings/passkeys",
+    title: "Passkeys",
+    description:
+      "Sign in with your fingerprint or face — no password. Add a passkey per device; Google login still works.",
+  },
+  {
     href: "/rules",
     title: "Categorization rules",
     description:

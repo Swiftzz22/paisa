@@ -27,6 +27,25 @@ model User {
   paymentModes        PaymentMode[]
   budgets             Budget[]
   sessions            Session[]
+  passkeys            Passkey[]
+}
+
+/// A WebAuthn passkey (biometric / device credential) bound to a user. The
+/// private key never leaves the user's device; we store only the public key,
+/// the credential id, and a signature counter for replay detection.
+model Passkey {
+  id           String   @id @default(uuid())
+  userId       String
+  credentialId String   @unique // base64url credential id
+  publicKey    Bytes // COSE public key
+  counter      Int      @default(0)
+  transports   String? // comma-joined transport hints (e.g. "internal,hybrid")
+  deviceName   String? // optional user-facing label
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 /// Server-side login session. The cookie holds only the random `token`; all
