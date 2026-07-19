@@ -12,11 +12,15 @@ const EXPECTED_KEYS: Record<string, readonly string[]> = Object.fromEntries(
 );
 
 // NVIDIA's build platform exposes an OpenAI-compatible endpoint. Get a key
-// (nvapi-…) at https://build.nvidia.com. llama-3.1-70b-instruct is free, fast
-// (~1.5s), and does clean OpenAI-format tool calling — verified directly.
-// (Note: 3.3-70b currently times out on the free tier; 3.1-70b is the pick.)
+// (nvapi-…) at https://build.nvidia.com. The 70B/49B models queue and hang on
+// the free tier (calls swing 0.6s → 27s → timeout), which blows the 60s
+// function cap once the agent chains a few calls. llama-3.1-8b-instruct is
+// consistently ~0.3s and does OpenAI-format tool calling — the enum/number
+// quirks it has are handled below (normalizeEnums + z.coerce + prompt).
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const MODEL = "meta/llama-3.1-70b-instruct";
+const MODEL = "meta/llama-3.1-8b-instruct";
+/** Per-call cap so a rare slow/queued response can't eat the whole 60s budget. */
+const CALL_TIMEOUT_MS = 18_000;
 // Each step is one model round-trip. Most questions resolve in 2–3.
 const MAX_STEPS = 5;
 /** Hard cap on the JSON size of a tool result before going back to the model. */
@@ -136,6 +140,8 @@ TIME FILTERS (this is where you tend to slip — be strict):
 - "last <weekday>" is a SINGLE day: set from = to = that date.
 - "how much did I spend [period]" → aggregateByCategory over that range, then sum the categories for the total.
 - "biggest/largest single transaction [period]" → queryTransactions with from/to and limit 1.
+- DEBIT vs CREDIT: spending/expense questions ("biggest transaction", "most I spent", "how much on X", "top merchants") use type "debit". Use "credit" ONLY when the user explicitly asks about money received, income, refunds, or credits.
+- Payment-mode values are lowercase: upi, card, cash, bank_transfer.
 
 TOOL CALL DISCIPLINE:
 - Use the EXACT parameter names from the schemas (monthlyTotals takes "fromMonth"/"toMonth" — not "from1Month" or "from_month").
@@ -177,6 +183,16 @@ function coerceArgs(
     const matched = canonicalByNorm.get(norm(incoming));
     const target = matched ?? incoming;
     if (!(target in out)) out[target] = value;
+  }
+  return out;
+}
+
+/** 8B occasionally uppercases enum values ("UPI", "DEBIT"); lowercase the known
+ * enum fields so they match stored values. */
+function normalizeEnums(args: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...args };
+  for (const k of ["paymentMode", "type"]) {
+    if (typeof out[k] === "string") out[k] = (out[k] as string).toLowerCase();
   }
   return out;
 }
@@ -242,20 +258,35 @@ async function nvidiaChat(
   apiKey: string,
   messages: ChatMsg[]
 ): Promise<{ content: string | null; toolCalls: ToolCall[] }> {
-  const res = await fetch(NVIDIA_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      messages,
-      tools: OPENAI_TOOLS,
-      temperature: 0,
-      max_tokens: 1024,
-    }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(NVIDIA_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages,
+        tools: OPENAI_TOOLS,
+        temperature: 0,
+        max_tokens: 1024,
+      }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `NVIDIA request timed out after ${CALL_TIMEOUT_MS / 1000}s.`
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (res.status === 429) {
     const ra = Number(res.headers.get("retry-after")) || 20;
     throw new GeminiRateLimitError(ra); // reuse: the UI auto-retries on this
@@ -337,7 +368,7 @@ export async function runAgentLoop(params: {
         rawArgs = {};
       }
       const expected = EXPECTED_KEYS[name as string] ?? [];
-      const args = coerceArgs(rawArgs, expected);
+      const args = normalizeEnums(coerceArgs(rawArgs, expected));
       const tool = AGENT_TOOLS[name];
       const t0 = performance.now();
       let responseObj: unknown;
