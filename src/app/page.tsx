@@ -122,6 +122,20 @@ export default async function Home({
   const weekSpent = Number(weekAgg._sum.amount ?? 0);
   const topCategory = summary.byCategory[0] ?? null;
 
+  // Cap the rendered list so wide ranges ("This year") don't paint hundreds of
+  // rows. Totals, budget, and the category breakdown above still reflect the
+  // full range — only the scrolling list is trimmed to the most recent items.
+  const LIST_CAP = 40;
+  let shownCount = 0;
+  const cappedDays: typeof summary.byDay = [];
+  for (const day of summary.byDay) {
+    if (shownCount >= LIST_CAP) break;
+    const txs = day.txs.slice(0, LIST_CAP - shownCount);
+    cappedDays.push({ ...day, txs });
+    shownCount += txs.length;
+  }
+  const listTruncated = summary.count > shownCount;
+
   return (
     <main className="mx-auto w-full max-w-md px-4 pb-6 pt-[max(1rem,env(safe-area-inset-top))] sm:max-w-lg sm:pt-6">
       <Header name={user.name} image={user.image} />
@@ -209,11 +223,11 @@ export default async function Home({
         <h2 className="mb-2 px-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
           Transactions
         </h2>
-        {summary.byDay.length === 0 ? (
+        {cappedDays.length === 0 ? (
           <EmptyState />
         ) : (
           <div className="space-y-4">
-            {summary.byDay.map((day) => (
+            {cappedDays.map((day) => (
               <div key={day.date.toISOString()}>
                 <div className="mb-1 flex items-baseline justify-between px-1">
                   <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
@@ -236,6 +250,12 @@ export default async function Home({
                 </div>
               </div>
             ))}
+            {listTruncated ? (
+              <p className="px-1 pt-1 text-center text-xs text-zinc-400">
+                Showing the most recent {shownCount} of {summary.count} — narrow
+                the range to see all.
+              </p>
+            ) : null}
           </div>
         )}
       </section>
