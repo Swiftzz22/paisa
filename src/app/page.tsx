@@ -3,11 +3,12 @@ import { getCurrentUser } from "@/lib/user";
 import { prisma } from "@/lib/prisma";
 import { formatINR } from "@/lib/format";
 import { paymentModeLabel } from "@/lib/categories";
-import { parseRangeFromParams, toDateInput, type RangePresetId } from "@/lib/range";
+import { parseRangeFromParams, toDateInput } from "@/lib/range";
 import { getRangeSummary, type TxRow, type CategorySlice } from "@/lib/spending";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { recategorizeMiscAction } from "@/lib/actions";
 import { SubmitButton } from "@/components/SubmitButton";
+import { SegmentedRange } from "@/components/SegmentedRange";
 import { getBudgetProgress, getMonthOverMonthDelta } from "@/lib/budgets";
 
 export const dynamic = "force-dynamic";
@@ -79,27 +80,7 @@ export default async function Home({
   const categoryFilter = params.category ?? null;
   const paymentModeFilter = params.paymentMode ?? null;
   const searchQuery = (params.q ?? "").trim() || null;
-  const [summary, budgetSummary, momDelta] = await Promise.all([
-    getRangeSummary({
-      userId: user.id,
-      from: range.from,
-      to: range.to,
-      categoryFilter,
-      paymentModeFilter,
-      searchQuery,
-    }),
-    getBudgetProgress(user.id),
-    getMonthOverMonthDelta(user.id),
-  ]);
-
   const filtersActive = Boolean(categoryFilter || paymentModeFilter || searchQuery);
-
-  const miscTotalCount = await prisma.expenseLine.count({
-    where: {
-      transaction: { userId: user.id },
-      category: { userId: user.id, name: "Misc", parentId: null },
-    },
-  });
 
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
@@ -108,16 +89,36 @@ export default async function Home({
   const weekOffset = (dayOfWeek + 6) % 7;
   const startOfWeek = new Date(startOfToday);
   startOfWeek.setDate(startOfWeek.getDate() - weekOffset);
-  const [todayAgg, weekAgg] = await Promise.all([
-    prisma.transaction.aggregate({
-      where: { userId: user.id, type: "debit", occurredAt: { gte: startOfToday, lte: endOfToday } },
-      _sum: { amount: true },
-    }),
-    prisma.transaction.aggregate({
-      where: { userId: user.id, type: "debit", occurredAt: { gte: startOfWeek, lte: endOfToday } },
-      _sum: { amount: true },
-    }),
-  ]);
+
+  // One concurrent batch instead of three sequential awaits — cuts the
+  // per-navigation latency that made tapping the time buttons feel slow.
+  const [summary, budgetSummary, momDelta, miscTotalCount, todayAgg, weekAgg] =
+    await Promise.all([
+      getRangeSummary({
+        userId: user.id,
+        from: range.from,
+        to: range.to,
+        categoryFilter,
+        paymentModeFilter,
+        searchQuery,
+      }),
+      getBudgetProgress(user.id),
+      getMonthOverMonthDelta(user.id),
+      prisma.expenseLine.count({
+        where: {
+          transaction: { userId: user.id },
+          category: { userId: user.id, name: "Misc", parentId: null },
+        },
+      }),
+      prisma.transaction.aggregate({
+        where: { userId: user.id, type: "debit", occurredAt: { gte: startOfToday, lte: endOfToday } },
+        _sum: { amount: true },
+      }),
+      prisma.transaction.aggregate({
+        where: { userId: user.id, type: "debit", occurredAt: { gte: startOfWeek, lte: endOfToday } },
+        _sum: { amount: true },
+      }),
+    ]);
   const todaySpent = Number(todayAgg._sum.amount ?? 0);
   const weekSpent = Number(weekAgg._sum.amount ?? 0);
   const topCategory = summary.byCategory[0] ?? null;
@@ -146,7 +147,11 @@ export default async function Home({
         bars={summary.monthlyBars}
       />
 
-      <SegmentedRange activePreset={range.preset} from={range.from} to={range.to} />
+      <SegmentedRange
+        activePreset={range.preset}
+        fromInput={toDateInput(range.from)}
+        toInput={toDateInput(range.to)}
+      />
 
       <section className="mt-3 grid grid-cols-2 gap-3">
         <MiniTile
@@ -359,58 +364,6 @@ function Hero({
         </div>
       </div>
     </section>
-  );
-}
-
-function SegmentedRange({
-  activePreset,
-  from,
-  to,
-}: {
-  activePreset: RangePresetId;
-  from: Date;
-  to: Date;
-}) {
-  const presets: { id: RangePresetId; label: string }[] = [
-    { id: "today", label: "Today" },
-    { id: "week", label: "Week" },
-    { id: "month", label: "Month" },
-    { id: "year", label: "Year" },
-  ];
-  return (
-    <div className="mt-4">
-      <div className="flex gap-1 rounded-2xl border border-zinc-200/80 bg-zinc-100/70 p-1 dark:border-zinc-800 dark:bg-zinc-900/60">
-        {presets.map((p) => {
-          const active = activePreset === p.id;
-          return (
-            <Link
-              key={p.id}
-              href={`/?range=${p.id}`}
-              className={
-                "flex-1 rounded-xl py-1.5 text-center text-[13px] font-medium transition-colors " +
-                (active
-                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-50"
-                  : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200")
-              }
-            >
-              {p.label}
-            </Link>
-          );
-        })}
-      </div>
-      <details className="mt-1.5 px-1">
-        <summary className="cursor-pointer list-none text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
-          Custom range ›
-        </summary>
-        <form method="GET" action="/" className="mt-2 grid grid-cols-[1fr_1fr_auto] gap-2">
-          <input type="date" name="from" defaultValue={toDateInput(from)} className="input" />
-          <input type="date" name="to" defaultValue={toDateInput(to)} className="input" />
-          <button type="submit" className="btn-secondary">
-            Go
-          </button>
-        </form>
-      </details>
-    </div>
   );
 }
 
