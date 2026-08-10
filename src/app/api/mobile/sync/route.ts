@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getMobileUser } from "@/lib/auth/mobile";
 import { runSyncForUser, getLastSyncRun } from "@/lib/sync";
+import { reconcileTransactionDates } from "@/lib/reconcile-dates";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,10 +36,13 @@ export async function POST(req: NextRequest) {
   inFlight.add(user.id);
   try {
     const status = await runSyncForUser(user.id);
+    // Correct any transactions whose stored date drifted from their email.
+    const datesFixed = await reconcileTransactionDates(user.id);
     return Response.json({
       fetched: status.fetched,
       parsed: status.processed.parsed,
       pending: status.pendingRemaining,
+      datesFixed,
       account: status.account,
       error: status.error ?? null,
     });
