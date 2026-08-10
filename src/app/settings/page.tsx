@@ -40,6 +40,12 @@ const TILES: Array<{
       "Sign in with your fingerprint or face — no password. Add a passkey per device; Google login still works.",
   },
   {
+    href: "/settings/mobile",
+    title: "Mobile app",
+    description:
+      "Connect the native paisa app on your phone. Generate an access token and paste it into the app.",
+  },
+  {
     href: "/rules",
     title: "Categorization rules",
     description:
