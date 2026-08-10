@@ -49,6 +49,7 @@ export async function GET(req: NextRequest) {
       id: t.id,
       merchant: t.merchant,
       category: catName,
+      categoryId: t.lines[0]?.categoryId ?? null,
       amount: Math.round(Number(t.amount)),
       type: t.type as "debit" | "credit",
       paymentMode: t.paymentMode,

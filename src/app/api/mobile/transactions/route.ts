@@ -16,7 +16,10 @@ type TxnWithLines = {
   paymentMode: string;
   occurredAt: Date;
   note: string | null;
-  lines: { category: { name: string; parent: { name: string } | null } | null }[];
+  lines: {
+    categoryId: string;
+    category: { name: string; parent: { name: string } | null } | null;
+  }[];
 };
 
 function serialize(t: TxnWithLines) {
@@ -26,6 +29,7 @@ function serialize(t: TxnWithLines) {
     id: t.id,
     merchant: t.merchant,
     category,
+    categoryId: t.lines[0]?.categoryId ?? null,
     amount: Math.round(Number(t.amount)),
     type: t.type as "debit" | "credit",
     paymentMode: t.paymentMode,
