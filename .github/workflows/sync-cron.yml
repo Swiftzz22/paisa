@@ -1,0 +1,35 @@
+name: Sync bank emails
+
+# Background ingestion so transactions log themselves even when the app is
+# closed. Hits the existing /api/cron/sync endpoint (protected by CRON_SECRET).
+# Every 30 min keeps us well within GitHub's free 2,000 Actions-min/month on a
+# private repo (~1,460 min/month). The app also syncs on open, so this is just
+# the "while you're not looking" backstop.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # every 30 minutes (UTC; GitHub may delay under load)
+  workflow_dispatch: {} # lets you run it manually from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger paisa sync
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET repo secret is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/sync-out.txt -w "%{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "https://paisa-tawny.vercel.app/api/cron/sync")
+          echo "HTTP $code"
+          cat /tmp/sync-out.txt || true
+          echo
+          if [ "$code" != "200" ]; then
+            echo "::error::Sync returned HTTP $code (check that CRON_SECRET matches Vercel)."
+            exit 1
+          fi
