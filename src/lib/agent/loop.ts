@@ -12,13 +12,15 @@ const EXPECTED_KEYS: Record<string, readonly string[]> = Object.fromEntries(
 );
 
 // NVIDIA's build platform exposes an OpenAI-compatible endpoint. Get a key
-// (nvapi-…) at https://build.nvidia.com. The 70B/49B models queue and hang on
-// the free tier (calls swing 0.6s → 27s → timeout), which blows the 60s
-// function cap once the agent chains a few calls. llama-3.1-8b-instruct is
-// consistently ~0.3s and does OpenAI-format tool calling — the enum/number
-// quirks it has are handled below (normalizeEnums + z.coerce + prompt).
+// (nvapi-…) at https://build.nvidia.com. Model availability there is not
+// stable: meta/llama-3.1-8b-instruct stopped serving entirely (every
+// completions call hung past 30s while /v1/models still listed it), and
+// llama-3.3-70b and the nemotron-nano-8b variants time out the same way.
+// gpt-oss-20b answers in well under a second with clean OpenAI-format tool
+// calls; mistralai/mistral-nemotron is the verified backup if this one goes
+// dark. If the agent starts timing out again, re-test before assuming the key.
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const MODEL = "meta/llama-3.1-8b-instruct";
+const MODEL = "openai/gpt-oss-20b";
 /** Per-call cap so a rare slow/queued response can't eat the whole 60s budget. */
 const CALL_TIMEOUT_MS = 18_000;
 // Each step is one model round-trip. Most questions resolve in 2–3.

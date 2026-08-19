@@ -4,8 +4,10 @@ import "server-only";
 // (build.nvidia.com), the same place the chat moved to — Gemini's free tier
 // kept rate-limiting. The statement importers still use Gemini directly
 // (multimodal PDF/image) and bring their own client + callGeminiWithBackoff.
+// Keep in sync with the model in lib/agent/loop.ts — see the note there on
+// NVIDIA pulling serving capacity from models it still lists.
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const NVIDIA_MODEL = "meta/llama-3.1-8b-instruct";
+const NVIDIA_MODEL = "openai/gpt-oss-20b";
 const NVIDIA_TIMEOUT_MS = 45_000;
 
 // Throttle between calls. With batching of up to BATCH_SIZE emails per call,
