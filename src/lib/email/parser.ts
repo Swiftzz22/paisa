@@ -97,7 +97,6 @@ export type ExtractedTransaction = {
   amount_inr: number | null;
   merchant: string | null;
   payment_mode: "card" | "upi" | "bank_transfer" | null;
-  transacted_at: string | null; // ISO 8601 date
   note: string | null;
   category_label: string | null; // matches one of the labels we sent in
   kind: "debit" | "credit"; // 'debit' = spending; 'credit' = refund / money received
@@ -230,7 +229,6 @@ Rules for extraction:
    "upi" for UPI
    "card" for credit/debit card swipes
    "bank_transfer" for NEFT/IMPS/RTGS/account-to-account credits & debits
-- transacted_at: ISO 8601 date the transaction happened.
 - note: optional, useful for context like "Card ending 8192" or "Refund ref 123".
 - If you can't extract amount or merchant, set is_transaction=false.
 
@@ -301,7 +299,6 @@ export async function extractTransactionBatch(params: {
       merchant: item.merchant ?? null,
       payment_mode:
         pm === "upi" || pm === "card" || pm === "bank_transfer" ? pm : null,
-      transacted_at: item.transacted_at ?? null,
       note: item.note ?? null,
       category_label: item.category_label ?? null,
       kind:

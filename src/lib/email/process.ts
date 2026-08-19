@@ -187,17 +187,12 @@ export async function processPendingForUser(
           ruleCategoryId ?? llmCategoryId ?? (await miscFallback(userId));
       }
 
-      // Bank/UPI notifications are sent right when the transaction happens, so
-      // the transaction time can't be meaningfully after the email arrived. If
-      // the LLM's date is missing, invalid, or lands in the future (e.g. a
-      // DD/MM-vs-MM/DD misparse of "11/08/2026" → Nov 8), fall back to when the
-      // email was received — which is within minutes of the real transaction.
-      const parsedAt = extract.transacted_at ? new Date(extract.transacted_at) : null;
-      const usableDate =
-        parsedAt !== null &&
-        !Number.isNaN(parsedAt.getTime()) &&
-        parsedAt.getTime() <= email.receivedAt.getTime() + 24 * 60 * 60 * 1000;
-      const txAt = usableDate ? parsedAt : email.receivedAt;
+      // Bank/UPI notifications are sent within seconds of the transaction, so
+      // the email's own arrival time IS the transaction time. The LLM's
+      // transacted_at is not used: it reads dates out of the body with no
+      // timezone context and has produced times hours ahead of the real one
+      // (delivery ETAs, statement due dates, DD/MM-vs-MM/DD swaps).
+      const txAt = email.receivedAt;
       const amount = round2(extract.amount_inr);
 
       const dup = await findDuplicateTransaction({
