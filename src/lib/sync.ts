@@ -11,6 +11,63 @@ const BACKFILL_START = new Date(2026, 0, 1);
 /** How many older emails to pull per backfill tick. */
 const BACKFILL_CHUNK_SIZE = 50;
 
+/**
+ * Wall-clock budget for one tick, with headroom under the cron route's 60s
+ * maxDuration. A tick that blows the limit is killed mid-flight and returns a
+ * 504 — the work it did still lands, but the caller sees only a failure. Better
+ * to stop cleanly and let the next tick continue: every phase here is
+ * resumable (backfill walks backward from the oldest stored email, and the
+ * pending queue lives in the database).
+ */
+export const TICK_BUDGET_MS = 45_000;
+
+type FetchedEmail = Awaited<ReturnType<typeof fetchRecent>>[number];
+
+/**
+ * Persist whichever of `messages` we haven't stored yet, in two queries.
+ *
+ * The previous per-message `findFirst` + `create` pair meant two sequential
+ * round-trips per email — ~160 against a remote Turso for a full tick, which is
+ * what pushed the cron past its budget as the backfill worked backwards.
+ */
+async function insertNewEmails(
+  userId: string,
+  messages: FetchedEmail[]
+): Promise<number> {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const unique: FetchedEmail[] = [];
+  for (const m of messages) {
+    if (!m.messageId || seen.has(m.messageId)) continue;
+    seen.add(m.messageId);
+    ids.push(m.messageId);
+    unique.push(m);
+  }
+  if (unique.length === 0) return 0;
+
+  const existing = await prisma.receivedEmail.findMany({
+    where: { userId, messageId: { in: ids } },
+    select: { messageId: true },
+  });
+  const have = new Set(existing.map((e) => e.messageId));
+  const fresh = unique.filter((m) => !have.has(m.messageId));
+  if (fresh.length === 0) return 0;
+
+  const { count } = await prisma.receivedEmail.createMany({
+    data: fresh.map((m) => ({
+      userId,
+      messageId: m.messageId,
+      fromAddress: m.fromAddress,
+      subject: m.subject,
+      rawHtml: m.html,
+      bodyText: m.text,
+      receivedAt: m.receivedAt,
+      parseStatus: "pending",
+    })),
+  });
+  return count;
+}
+
 export type SyncRunStatus = {
   ranAt: Date;
   fetched: number; // new emails persisted from Gmail this tick
@@ -21,6 +78,8 @@ export type SyncRunStatus = {
   backfillComplete: boolean;
   account: string | null;
   error?: string;
+  /** Set when the tick's time budget ran out before every phase had run. */
+  stoppedEarly?: boolean;
 };
 
 // State on globalThis so it's shared across Turbopack module instances (the
@@ -62,8 +121,12 @@ function emptyStatus(): SyncRunStatus {
  * most recent, then process one batch of pending emails into transactions.
  * Records the result in the per-user status map and returns it.
  */
-export async function runSyncForUser(userId: string): Promise<SyncRunStatus> {
+export async function runSyncForUser(
+  userId: string,
+  deadline?: number
+): Promise<SyncRunStatus> {
   const status = emptyStatus();
+  const outOfTime = () => deadline !== undefined && Date.now() >= deadline;
 
   try {
     const refreshToken = await getRefreshToken(userId);
@@ -85,70 +148,33 @@ export async function runSyncForUser(userId: string): Promise<SyncRunStatus> {
       select: { receivedAt: true },
     });
     const cursor = oldest?.receivedAt ?? new Date();
-    if (cursor.getTime() > BACKFILL_START.getTime()) {
+    if (cursor.getTime() > BACKFILL_START.getTime() && !outOfTime()) {
       const messages = await fetchRecent(refreshToken, {
         limit: BACKFILL_CHUNK_SIZE,
         after: BACKFILL_START,
         before: new Date(cursor),
       });
-      let inserted = 0;
-      for (const m of messages) {
-        if (!m.messageId) continue;
-        const exists = await prisma.receivedEmail.findFirst({
-          where: { userId, messageId: m.messageId },
-          select: { id: true },
-        });
-        if (exists) continue;
-        await prisma.receivedEmail.create({
-          data: {
-            userId,
-            messageId: m.messageId,
-            fromAddress: m.fromAddress,
-            subject: m.subject,
-            rawHtml: m.html,
-            bodyText: m.text,
-            receivedAt: m.receivedAt,
-            parseStatus: "pending",
-          },
-        });
-        inserted++;
-      }
+      const inserted = await insertNewEmails(userId, messages);
       status.fetched += inserted;
       status.backfillStillRunning = inserted > 0;
       await markSynced(userId);
     }
 
     // 2. Going-forward: pull the most recent financial-sender emails.
-    const recent = await fetchRecent(refreshToken, { limit: 30 });
-    for (const m of recent) {
-      if (!m.messageId) continue;
-      const exists = await prisma.receivedEmail.findFirst({
-        where: { userId, messageId: m.messageId },
-        select: { id: true },
-      });
-      if (exists) continue;
-      await prisma.receivedEmail.create({
-        data: {
-          userId,
-          messageId: m.messageId,
-          fromAddress: m.fromAddress,
-          subject: m.subject,
-          rawHtml: m.html,
-          bodyText: m.text,
-          receivedAt: m.receivedAt,
-          parseStatus: "pending",
-        },
-      });
-      status.fetched++;
+    if (!outOfTime()) {
+      const recent = await fetchRecent(refreshToken, { limit: 30 });
+      status.fetched += await insertNewEmails(userId, recent);
     }
 
     // 3. Process one batch of pending emails into transactions.
-    if (isGeminiConfigured()) {
+    if (isGeminiConfigured() && !outOfTime()) {
       const result = await processPendingForUser(userId);
       status.processed.parsed = result.parsed;
       status.processed.ignored = result.ignored;
       status.processed.failed = result.failed;
     }
+
+    status.stoppedEarly = outOfTime();
   } catch (e) {
     status.error = e instanceof Error ? e.message : String(e);
     console.error(`[sync] user ${userId} failed:`, e);
@@ -185,7 +211,7 @@ export async function runSyncForUser(userId: string): Promise<SyncRunStatus> {
  * Re-entrancy-safe (skips if a tick is already running). Processes users
  * sequentially to stay well under Gemini's rate limits.
  */
-export async function runSyncTick(): Promise<void> {
+export async function runSyncTick(deadline?: number): Promise<void> {
   const state = syncState();
   if (state.running) return;
   state.running = true;
@@ -194,7 +220,10 @@ export async function runSyncTick(): Promise<void> {
       select: { userId: true },
     });
     for (const { userId } of accounts) {
-      await runSyncForUser(userId);
+      // Stop handing out work once the budget is spent; the next tick picks up
+      // the remaining users rather than the whole run dying on a timeout.
+      if (deadline !== undefined && Date.now() >= deadline) break;
+      await runSyncForUser(userId, deadline);
     }
   } catch (e) {
     console.error("[sync tick] failed to enumerate users:", e);

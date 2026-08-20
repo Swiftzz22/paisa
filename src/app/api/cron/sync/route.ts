@@ -1,4 +1,4 @@
-import { runSyncTick } from "@/lib/sync";
+import { runSyncTick, TICK_BUDGET_MS } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,9 +34,13 @@ export async function GET(req: Request) {
   }
 
   const startedAt = new Date().toISOString();
+  const t0 = Date.now();
   try {
-    await runSyncTick();
-    return Response.json({ ok: true, startedAt });
+    // Stop before Vercel kills the function: an overrun returns a 504 with no
+    // body, which the GitHub Actions cron reports as a hard failure even though
+    // the work partly succeeded. Whatever is left resumes on the next tick.
+    await runSyncTick(t0 + TICK_BUDGET_MS);
+    return Response.json({ ok: true, startedAt, ms: Date.now() - t0 });
   } catch (e) {
     console.error("[cron/sync] failed:", e);
     return Response.json(

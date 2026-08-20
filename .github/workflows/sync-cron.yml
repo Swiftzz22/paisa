@@ -23,13 +23,20 @@ jobs:
             echo "::error::CRON_SECRET repo secret is not set. Add it under Settings -> Secrets and variables -> Actions."
             exit 1
           fi
-          code=$(curl -sS -o /tmp/sync-out.txt -w "%{http_code}" \
+          code=$(curl -sS -o /tmp/sync-out.txt -w "%{http_code}" --max-time 120 \
             -H "Authorization: Bearer $CRON_SECRET" \
             "https://paisa-tawny.vercel.app/api/cron/sync")
           echo "HTTP $code"
           cat /tmp/sync-out.txt || true
           echo
-          if [ "$code" != "200" ]; then
-            echo "::error::Sync returned HTTP $code (check that CRON_SECRET matches Vercel)."
-            exit 1
-          fi
+          # Name the actual cause per status — the old catch-all blamed
+          # CRON_SECRET for every failure, which sent us hunting the wrong bug
+          # when the real problem was the function timing out.
+          case "$code" in
+            200) ;;
+            401) echo "::error::HTTP 401 — CRON_SECRET here does not match the one in Vercel."; exit 1 ;;
+            503) echo "::error::HTTP 503 — CRON_SECRET is not set in the Vercel project env."; exit 1 ;;
+            504) echo "::error::HTTP 504 — the sync function exceeded its time limit. It should now stop cleanly within its budget; if this persists the per-tick work needs trimming."; exit 1 ;;
+            500) echo "::error::HTTP 500 — the sync threw. See the response body above and the Vercel function logs."; exit 1 ;;
+            *)   echo "::error::Sync returned HTTP $code. See the response body above."; exit 1 ;;
+          esac

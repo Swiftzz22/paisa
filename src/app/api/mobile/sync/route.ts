@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getMobileUser } from "@/lib/auth/mobile";
-import { runSyncForUser, getLastSyncRun } from "@/lib/sync";
+import { runSyncForUser, getLastSyncRun, TICK_BUDGET_MS } from "@/lib/sync";
 import { reconcileTransactionDates } from "@/lib/reconcile-dates";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +35,9 @@ export async function POST(req: NextRequest) {
 
   inFlight.add(user.id);
   try {
-    const status = await runSyncForUser(user.id);
+    // Same budget as the cron: a pull-to-refresh that overruns returns a 504
+    // the app can only report as a generic failure.
+    const status = await runSyncForUser(user.id, Date.now() + TICK_BUDGET_MS);
     // Correct any transactions whose stored date drifted from their email.
     const datesFixed = await reconcileTransactionDates(user.id);
     return Response.json({
