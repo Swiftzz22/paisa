@@ -21,7 +21,21 @@ export type FetchOptions = {
   after?: Date;
   /** Only fetch emails received before this date (exclusive). */
   before?: Date;
+  /**
+   * Epoch ms after which to stop and return what we have. Without this a single
+   * call can outlast the whole serverless budget, since each message body is a
+   * separate Gmail round-trip.
+   */
+  deadline?: number;
 };
+
+/**
+ * How many message bodies to pull at once. These were fetched one at a time,
+ * so a 50-message backfill meant 50 sequential round-trips — enough on its own
+ * to blow a 60s function limit. Gmail allows 250 quota units/user/second and a
+ * messages.get costs 5, so 8 in flight stays well inside the budget.
+ */
+const FETCH_CONCURRENCY = 8;
 
 /**
  * Fetch up to `limit` messages from anywhere in the user's mail, filtered to
@@ -41,7 +55,10 @@ export async function fetchRecent(
 
   // Paginate until we've collected up to `limit` messages or Gmail has
   // nothing more to return. Each `list` page caps at 500 from the API.
-  while (out.length < opts.limit) {
+  const outOfTime = () =>
+    opts.deadline !== undefined && Date.now() >= opts.deadline;
+
+  while (out.length < opts.limit && !outOfTime()) {
     const remaining = opts.limit - out.length;
     const pageSize = Math.min(500, remaining);
     const list = await gmail.users.messages.list({
@@ -54,15 +71,20 @@ export async function fetchRecent(
     const ids = list.data.messages ?? [];
     if (ids.length === 0) break;
 
-    for (const ref of ids) {
-      if (!ref.id) continue;
-      if (out.length >= opts.limit) break;
-      const msg = await gmail.users.messages.get({
-        userId: "me",
-        id: ref.id,
-        format: "full",
-      });
-      out.push(extractMessage(msg.data));
+    const refs = ids
+      .map((r) => r.id)
+      .filter((id): id is string => Boolean(id))
+      .slice(0, remaining);
+
+    for (let i = 0; i < refs.length; i += FETCH_CONCURRENCY) {
+      if (outOfTime()) break;
+      const chunk = refs.slice(i, i + FETCH_CONCURRENCY);
+      const msgs = await Promise.all(
+        chunk.map((id) =>
+          gmail.users.messages.get({ userId: "me", id, format: "full" })
+        )
+      );
+      for (const m of msgs) out.push(extractMessage(m.data));
     }
 
     if (!list.data.nextPageToken) break;

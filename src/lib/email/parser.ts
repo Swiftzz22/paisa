@@ -8,7 +8,10 @@ import "server-only";
 // NVIDIA pulling serving capacity from models it still lists.
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const NVIDIA_MODEL = "openai/gpt-oss-20b";
-const NVIDIA_TIMEOUT_MS = 45_000;
+// Was 45s, which on its own could consume a whole sync tick's budget and get
+// the function killed. A healthy call returns in a couple of seconds; this is
+// only a guard against the model going unresponsive, as llama-3.1-8b did.
+const NVIDIA_TIMEOUT_MS = 25_000;
 
 // Throttle between calls. With batching of up to BATCH_SIZE emails per call,
 // 4.5s between calls = ~13 calls/min × 5 emails = ~65 emails/min effective.

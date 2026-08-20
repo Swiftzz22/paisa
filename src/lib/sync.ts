@@ -21,6 +21,9 @@ const BACKFILL_CHUNK_SIZE = 50;
  */
 export const TICK_BUDGET_MS = 45_000;
 
+/** Headroom the parse phase needs before it's worth starting at all. */
+const PARSE_RESERVE_MS = 20_000;
+
 type FetchedEmail = Awaited<ReturnType<typeof fetchRecent>>[number];
 
 /**
@@ -126,7 +129,9 @@ export async function runSyncForUser(
   deadline?: number
 ): Promise<SyncRunStatus> {
   const status = emptyStatus();
-  const outOfTime = () => deadline !== undefined && Date.now() >= deadline;
+  const timeLeft = () =>
+    deadline === undefined ? Number.POSITIVE_INFINITY : deadline - Date.now();
+  const outOfTime = () => timeLeft() <= 0;
 
   try {
     const refreshToken = await getRefreshToken(userId);
@@ -153,6 +158,7 @@ export async function runSyncForUser(
         limit: BACKFILL_CHUNK_SIZE,
         after: BACKFILL_START,
         before: new Date(cursor),
+        deadline,
       });
       const inserted = await insertNewEmails(userId, messages);
       status.fetched += inserted;
@@ -162,12 +168,15 @@ export async function runSyncForUser(
 
     // 2. Going-forward: pull the most recent financial-sender emails.
     if (!outOfTime()) {
-      const recent = await fetchRecent(refreshToken, { limit: 30 });
+      const recent = await fetchRecent(refreshToken, { limit: 30, deadline });
       status.fetched += await insertNewEmails(userId, recent);
     }
 
-    // 3. Process one batch of pending emails into transactions.
-    if (isGeminiConfigured() && !outOfTime()) {
+    // 3. Process one batch of pending emails into transactions. Needs room for
+    // a whole LLM round-trip, so check for real headroom rather than merely
+    // "not past the deadline" — starting this with two seconds left is how the
+    // tick overran even with a budget in place.
+    if (isGeminiConfigured() && timeLeft() >= PARSE_RESERVE_MS) {
       const result = await processPendingForUser(userId);
       status.processed.parsed = result.parsed;
       status.processed.ignored = result.ignored;
