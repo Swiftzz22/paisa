@@ -27,36 +27,68 @@ const PAYMENT_LABELS: Record<string, string> = {
 const PERIODS = ["day", "week", "month", "year"] as const;
 type Period = (typeof PERIODS)[number];
 
-function rangeFor(period: Period, now: Date): { from: Date; to: Date; label: string } {
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const d = now.getDate();
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/**
+ * Period boundaries in the caller's timezone, expressed as UTC instants.
+ *
+ * `tzOffset` is minutes ahead of UTC (+330 for IST). This function used to
+ * build dates from the server's own clock, and Vercel runs in UTC — so for a
+ * user in IST "today" began at 05:30 their time, and a 1am purchase counted
+ * against the previous day.
+ *
+ * Shifting the clock by the offset lets the UTC getters read the caller's local
+ * wall time; subtracting it again turns a local midnight back into an instant.
+ * No DST handling, which is correct for India and wrong by an hour twice a year
+ * in zones that observe it.
+ */
+function rangeFor(
+  period: Period,
+  now: Date,
+  tzOffset: number
+): { from: Date; to: Date; label: string } {
+  const shift = tzOffset * 60_000;
+  const local = new Date(now.getTime() + shift);
+  const y = local.getUTCFullYear();
+  const m = local.getUTCMonth();
+  const d = local.getUTCDate();
+
+  /** A local wall-clock time, back as the UTC instant it actually happened. */
+  const at = (
+    yy: number, mm: number, dd: number,
+    hh = 0, mi = 0, ss = 0, ms = 0
+  ) => new Date(Date.UTC(yy, mm, dd, hh, mi, ss, ms) - shift);
+
   if (period === "day") {
     return {
-      from: new Date(y, m, d, 0, 0, 0, 0),
-      to: new Date(y, m, d, 23, 59, 59, 999),
+      from: at(y, m, d),
+      to: at(y, m, d, 23, 59, 59, 999),
       label: "Today",
     };
   }
   if (period === "week") {
-    const daysSinceMon = (now.getDay() + 6) % 7; // week starts Monday
+    const daysSinceMon = (local.getUTCDay() + 6) % 7; // week starts Monday
     return {
-      from: new Date(y, m, d - daysSinceMon, 0, 0, 0, 0),
-      to: new Date(y, m, d, 23, 59, 59, 999),
+      from: at(y, m, d - daysSinceMon),
+      to: at(y, m, d, 23, 59, 59, 999),
       label: "This week",
     };
   }
   if (period === "year") {
     return {
-      from: new Date(y, 0, 1, 0, 0, 0, 0),
-      to: new Date(y, 11, 31, 23, 59, 59, 999),
+      from: at(y, 0, 1),
+      to: at(y, 11, 31, 23, 59, 59, 999),
       label: `${y}`,
     };
   }
   return {
-    from: new Date(y, m, 1, 0, 0, 0, 0),
-    to: new Date(y, m + 1, 0, 23, 59, 59, 999),
-    label: now.toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
+    // Day 0 of the next month is the last day of this one.
+    from: at(y, m, 1),
+    to: at(y, m + 1, 0, 23, 59, 59, 999),
+    label: `${MONTH_NAMES[m]} ${y}`,
   };
 }
 
@@ -157,8 +189,16 @@ export async function GET(req: NextRequest) {
   const user = await getMobileUser(req.headers.get("authorization"));
   if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
 
+  // Minutes ahead of UTC, as the client sees it (+330 for IST). Clamped to the
+  // real-world range; absent or unparseable means UTC, matching the old
+  // behaviour rather than guessing.
+  const rawOffset = Number(req.nextUrl.searchParams.get("tzOffset"));
+  const tzOffset = Number.isFinite(rawOffset)
+    ? Math.max(-840, Math.min(840, Math.trunc(rawOffset)))
+    : 0;
+
   const now = new Date();
-  const year = rangeFor("year", now);
+  const year = rangeFor("year", now, tzOffset);
 
   const txs = await prisma.transaction.findMany({
     where: {
@@ -197,7 +237,7 @@ export async function GET(req: NextRequest) {
 
   const periods = Object.fromEntries(
     PERIODS.map((p) => {
-      const r = p === "year" ? year : rangeFor(p, now);
+      const r = p === "year" ? year : rangeFor(p, now, tzOffset);
       return [p, summarize(rows, p, r.from, r.to, r.label, colorFor)];
     })
   ) as Record<Period, ReturnType<typeof summarize>>;
