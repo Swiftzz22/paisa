@@ -8,6 +8,13 @@ export const runtime = "nodejs";
 
 const PAGE = 25;
 
+/**
+ * Ceiling for `?limit=`. The app pulls its whole history in one request so it
+ * can search on-device with no round-trip per keystroke; a year is only a few
+ * hundred rows. Anything beyond this still falls back to cursor paging.
+ */
+const MAX_PAGE = 500;
+
 type TxnWithLines = {
   id: string;
   merchant: string;
@@ -44,16 +51,22 @@ export async function GET(req: NextRequest) {
   if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
 
   const cursor = req.nextUrl.searchParams.get("cursor");
+  const requested = Number(req.nextUrl.searchParams.get("limit"));
+  const page =
+    Number.isFinite(requested) && requested > 0
+      ? Math.min(Math.floor(requested), MAX_PAGE)
+      : PAGE;
+
   const rows = await prisma.transaction.findMany({
     where: { userId: user.id },
     orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-    take: PAGE + 1,
+    take: page + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     include: { lines: { include: { category: { include: { parent: true } } } } },
   });
 
-  const hasMore = rows.length > PAGE;
-  const items = rows.slice(0, PAGE).map(serialize);
+  const hasMore = rows.length > page;
+  const items = rows.slice(0, page).map(serialize);
   const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
 
   return Response.json({ items, nextCursor });
