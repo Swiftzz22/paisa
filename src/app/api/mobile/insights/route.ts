@@ -96,6 +96,10 @@ export async function GET(req: NextRequest) {
     from: from.toISOString(),
     to: to.toISOString(),
     spent: Math.round(summary.spentUnfiltered),
+    received: Math.round(summary.received),
+    // Net outflow: what left minus what came in. Negative means the period
+    // brought in more than it spent.
+    net: Math.round(summary.spentUnfiltered - summary.received),
     txCount: summary.countUnfiltered,
     categories,
     paymentModes,
