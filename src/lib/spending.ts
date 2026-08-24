@@ -1,5 +1,11 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import {
+  MONTH_NAMES,
+  localMonthKey,
+  localParts,
+  monthRange,
+} from "@/lib/time";
 
 export type TxRow = {
   id: string;
@@ -87,6 +93,8 @@ export async function getRangeSummary(params: {
   paymentModeFilter?: string | null;
   /** Free-text search across merchant / note / category names. */
   searchQuery?: string | null;
+  /** Minutes ahead of UTC, for bucketing the monthly bars. */
+  tzOffset?: number;
 }): Promise<RangeSummary> {
   const txs = await prisma.transaction.findMany({
     where: {
@@ -168,7 +176,7 @@ export async function getRangeSummary(params: {
   const listRows = filteredRows.slice(0, LIST_CAP);
   const byDay = groupByDay(listRows);
 
-  const monthlyBars = await getMonthlyBars(params.userId);
+  const monthlyBars = await getMonthlyBars(params.userId, params.tzOffset ?? 0);
 
   return {
     spent,
@@ -258,9 +266,15 @@ function groupByDay(rows: TxRow[]): DayGroup[] {
   );
 }
 
-async function getMonthlyBars(userId: string): Promise<MonthlyBar[]> {
+async function getMonthlyBars(
+  userId: string,
+  tzOffset = 0
+): Promise<MonthlyBar[]> {
   const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+  // Eleven months back plus the current one; bucketing uses the viewer's
+  // months, so a transaction just after local midnight on the 1st lands in the
+  // right bar rather than the previous one.
+  const start = monthRange(now, tzOffset, -11).from;
   const txs = await prisma.transaction.findMany({
     where: { userId, occurredAt: { gte: start }, type: "debit" },
     select: { amount: true, occurredAt: true },
@@ -268,20 +282,19 @@ async function getMonthlyBars(userId: string): Promise<MonthlyBar[]> {
 
   // Seed all 12 months (so empty months still show as zero bars).
   const months: MonthlyBar[] = [];
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+  for (let i = -11; i <= 0; i++) {
+    const r = monthRange(now, tzOffset, i);
+    const { year, month } = localParts(r.from, tzOffset);
     months.push({
-      monthKey: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-      label: d.toLocaleDateString("en-IN", {
-        month: "short",
-      }),
+      monthKey: `${year}-${String(month + 1).padStart(2, "0")}`,
+      label: MONTH_NAMES[month].slice(0, 3),
       total: 0,
     });
   }
 
+  const byKey = new Map(months.map((m) => [m.monthKey, m]));
   for (const t of txs) {
-    const key = `${t.occurredAt.getFullYear()}-${String(t.occurredAt.getMonth() + 1).padStart(2, "0")}`;
-    const bar = months.find((m) => m.monthKey === key);
+    const bar = byKey.get(localMonthKey(t.occurredAt, tzOffset));
     if (bar) bar.total += Number(t.amount);
   }
 

@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { daysInLocalMonth, localParts, monthRange } from "@/lib/time";
 
 export type BudgetWithCategory = {
   id: string;
@@ -57,28 +58,19 @@ export type MonthlyBudgetSummary = {
  */
 export async function getBudgetProgress(
   userId: string,
-  when: Date = new Date()
+  when: Date = new Date(),
+  tzOffset = 0
 ): Promise<MonthlyBudgetSummary> {
-  const monthStart = new Date(when.getFullYear(), when.getMonth(), 1, 0, 0, 0, 0);
-  const monthEnd = new Date(
-    when.getFullYear(),
-    when.getMonth() + 1,
-    0,
-    23,
-    59,
-    59,
-    999
-  );
-  const daysInMonth = monthEnd.getDate();
-  const todayDay = Math.min(when.getDate(), daysInMonth);
+  const month = monthRange(when, tzOffset);
+  const monthStart = month.from;
+  const monthEnd = month.to;
+  const daysInMonth = daysInLocalMonth(when, tzOffset);
+  const todayDay = Math.min(localParts(when, tzOffset).day, daysInMonth);
 
   const budgets = await getBudgets(userId);
   if (budgets.length === 0) {
     return {
-      monthLabel: when.toLocaleDateString("en-IN", {
-        month: "long",
-        year: "numeric",
-      }),
+      monthLabel: month.label,
       daysInMonth,
       daysElapsed: todayDay,
       progress: [],
@@ -144,10 +136,7 @@ export async function getBudgetProgress(
   });
 
   return {
-    monthLabel: when.toLocaleDateString("en-IN", {
-      month: "long",
-      year: "numeric",
-    }),
+    monthLabel: month.label,
     daysInMonth,
     daysElapsed: todayDay,
     progress,
@@ -161,19 +150,29 @@ export async function getBudgetProgress(
  * Returns { thisMonth, lastMonth, deltaAbs, deltaPercent } where positive
  * delta means you spent MORE this month than last.
  */
-export async function getMonthOverMonthDelta(userId: string, when: Date = new Date()) {
-  const thisStart = new Date(when.getFullYear(), when.getMonth(), 1);
-  const thisEnd = new Date(when.getFullYear(), when.getMonth() + 1, 0, 23, 59, 59, 999);
-  const lastStart = new Date(when.getFullYear(), when.getMonth() - 1, 1);
-  const lastEnd = new Date(when.getFullYear(), when.getMonth(), 0, 23, 59, 59, 999);
+export async function getMonthOverMonthDelta(
+  userId: string,
+  when: Date = new Date(),
+  tzOffset = 0
+) {
+  const thisMonthRange = monthRange(when, tzOffset);
+  const lastMonthRange = monthRange(when, tzOffset, -1);
 
   const [thisTxs, lastTxs] = await Promise.all([
     prisma.transaction.findMany({
-      where: { userId, type: "debit", occurredAt: { gte: thisStart, lte: thisEnd } },
+      where: {
+        userId,
+        type: "debit",
+        occurredAt: { gte: thisMonthRange.from, lte: thisMonthRange.to },
+      },
       select: { amount: true },
     }),
     prisma.transaction.findMany({
-      where: { userId, type: "debit", occurredAt: { gte: lastStart, lte: lastEnd } },
+      where: {
+        userId,
+        type: "debit",
+        occurredAt: { gte: lastMonthRange.from, lte: lastMonthRange.to },
+      },
       select: { amount: true },
     }),
   ]);

@@ -3,6 +3,7 @@ import { getMobileUser } from "@/lib/auth/mobile";
 import { prisma } from "@/lib/prisma";
 import { getBudgetProgress, getMonthOverMonthDelta } from "@/lib/budgets";
 import { getRangeSummary } from "@/lib/spending";
+import { clampTzOffset, monthRange } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,14 +18,21 @@ export async function GET(req: NextRequest) {
   const user = await getMobileUser(req.headers.get("authorization"));
   if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
 
+  // Same offset the insights endpoint uses, so the hero card and the Insights
+  // card never disagree about where a month starts.
+  const tzOffset = clampTzOffset(req.nextUrl.searchParams.get("tzOffset"));
   const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+  const month = monthRange(now, tzOffset);
 
   const [mom, budget, summary, recent] = await Promise.all([
-    getMonthOverMonthDelta(user.id),
-    getBudgetProgress(user.id),
-    getRangeSummary({ userId: user.id, from: monthStart, to: monthEnd }),
+    getMonthOverMonthDelta(user.id, now, tzOffset),
+    getBudgetProgress(user.id, now, tzOffset),
+    getRangeSummary({
+      userId: user.id,
+      from: month.from,
+      to: month.to,
+      tzOffset,
+    }),
     prisma.transaction.findMany({
       where: { userId: user.id },
       orderBy: { occurredAt: "desc" },

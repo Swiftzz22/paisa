@@ -10,6 +10,8 @@ import { recategorizeMiscAction } from "@/lib/actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { SegmentedRange } from "@/components/SegmentedRange";
 import { getBudgetProgress, getMonthOverMonthDelta } from "@/lib/budgets";
+import { dayRange, weekRange } from "@/lib/time";
+import { getTzOffset } from "@/lib/tz-server";
 
 export const dynamic = "force-dynamic";
 
@@ -76,19 +78,18 @@ export default async function Home({
 }) {
   const params = await searchParams;
   const user = await getCurrentUser();
-  const { range, warning } = parseRangeFromParams(params);
+  const tzOffset = await getTzOffset();
+  const { range, warning } = parseRangeFromParams(params, new Date(), tzOffset);
   const categoryFilter = params.category ?? null;
   const paymentModeFilter = params.paymentMode ?? null;
   const searchQuery = (params.q ?? "").trim() || null;
   const filtersActive = Boolean(categoryFilter || paymentModeFilter || searchQuery);
 
   const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-  const dayOfWeek = now.getDay();
-  const weekOffset = (dayOfWeek + 6) % 7;
-  const startOfWeek = new Date(startOfToday);
-  startOfWeek.setDate(startOfWeek.getDate() - weekOffset);
+  const today = dayRange(now, tzOffset);
+  const startOfToday = today.from;
+  const endOfToday = today.to;
+  const startOfWeek = weekRange(now, tzOffset).from;
 
   // One concurrent batch instead of three sequential awaits — cuts the
   // per-navigation latency that made tapping the time buttons feel slow.
@@ -101,9 +102,10 @@ export default async function Home({
         categoryFilter,
         paymentModeFilter,
         searchQuery,
+        tzOffset,
       }),
-      getBudgetProgress(user.id),
-      getMonthOverMonthDelta(user.id),
+      getBudgetProgress(user.id, now, tzOffset),
+      getMonthOverMonthDelta(user.id, now, tzOffset),
       prisma.expenseLine.count({
         where: {
           transaction: { userId: user.id },
@@ -149,8 +151,8 @@ export default async function Home({
 
       <SegmentedRange
         activePreset={range.preset}
-        fromInput={toDateInput(range.from)}
-        toInput={toDateInput(range.to)}
+        fromInput={toDateInput(range.from, tzOffset)}
+        toInput={toDateInput(range.to, tzOffset)}
       />
 
       <section className="mt-3 grid grid-cols-2 gap-3">

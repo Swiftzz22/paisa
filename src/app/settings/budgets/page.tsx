@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/user";
 import { getCategoryOptions } from "@/lib/categories";
 import { getBudgetProgress } from "@/lib/budgets";
+import { getTzOffset } from "@/lib/tz-server";
 import { formatINR } from "@/lib/format";
 import {
   upsertBudgetAction,
@@ -17,10 +18,11 @@ export default async function BudgetsSettings({
 }) {
   const params = await searchParams;
   const user = await getCurrentUser();
+  const tzOffset = await getTzOffset();
 
   const [categories, summary] = await Promise.all([
     getCategoryOptions(user.id),
-    getBudgetProgress(user.id),
+    getBudgetProgress(user.id, new Date(), tzOffset),
   ]);
 
   return (

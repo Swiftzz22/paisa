@@ -4,6 +4,7 @@ import "./globals.css";
 import { Analytics } from "@vercel/analytics/next";
 import { BottomNav } from "@/components/BottomNav";
 import { AskPopover } from "@/components/AskPopover";
+import { TimezoneSync } from "@/components/TimezoneSync";
 import { getSessionUser } from "@/lib/auth/session";
 
 const geistSans = Geist({
@@ -59,6 +60,7 @@ export default async function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-zinc-50 pb-[env(safe-area-inset-bottom)] dark:bg-black">
+        <TimezoneSync />
         {children}
         {signedIn ? (
           <>

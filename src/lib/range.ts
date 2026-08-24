@@ -1,4 +1,5 @@
 // Date-range parsing and presets for the spending dashboard.
+import { MONTH_NAMES, atLocal, localParts } from "@/lib/time";
 
 export type RangePresetId =
   | "today"
@@ -16,84 +17,86 @@ export type DateRange = {
   label: string;
 };
 
-function startOfDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+// All boundaries are computed in the viewer's timezone (minutes ahead of UTC),
+// not the server's. Rendering happens on Vercel in UTC, so using the server
+// clock put a viewer in IST into days and months that began at 05:30 local.
+
+function startOfDay(d: Date, tz: number): Date {
+  const { year, month, day } = localParts(d, tz);
+  return atLocal(tz, year, month, day);
 }
 
-function endOfDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
+function endOfDay(d: Date, tz: number): Date {
+  const { year, month, day } = localParts(d, tz);
+  return atLocal(tz, year, month, day, 23, 59, 59, 999);
 }
 
-function startOfMonth(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+function startOfMonth(d: Date, tz: number): Date {
+  const { year, month } = localParts(d, tz);
+  return atLocal(tz, year, month, 1);
 }
 
-function startOfYear(d: Date): Date {
-  return new Date(d.getFullYear(), 0, 1, 0, 0, 0, 0);
+function startOfYear(d: Date, tz: number): Date {
+  return atLocal(tz, localParts(d, tz).year, 0, 1);
 }
 
 /** Monday as start of week (Indian convention varies; Monday is common). */
-function startOfWeek(d: Date): Date {
-  const dayOfWeek = d.getDay(); // 0 = Sun
-  const offset = (dayOfWeek + 6) % 7; // Mon=0, Sun=6
-  const x = startOfDay(d);
-  x.setDate(x.getDate() - offset);
-  return x;
+function startOfWeek(d: Date, tz: number): Date {
+  const { year, month, day, weekday } = localParts(d, tz);
+  const offset = (weekday + 6) % 7; // Mon=0, Sun=6
+  return atLocal(tz, year, month, day - offset);
 }
 
-function parseDateInput(s: string | undefined | null): Date | null {
+/** A YYYY-MM-DD input means that calendar date in the viewer's zone. */
+function parseDateInput(s: string | undefined | null, tz: number): Date | null {
   if (!s) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
   if (!m) return null;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const d = atLocal(tz, Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   if (Number.isNaN(d.getTime())) return null;
   return d;
 }
 
-const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-export function presetRange(preset: RangePresetId, now: Date = new Date()): DateRange {
+export function presetRange(
+  preset: RangePresetId,
+  now: Date = new Date(),
+  tz = 0
+): DateRange {
+  const { year, month } = localParts(now, tz);
   switch (preset) {
     case "today":
       return {
         preset,
-        from: startOfDay(now),
-        to: endOfDay(now),
+        from: startOfDay(now, tz),
+        to: endOfDay(now, tz),
         label: "Today",
       };
     case "week": {
       return {
         preset,
-        from: startOfWeek(now),
-        to: endOfDay(now),
+        from: startOfWeek(now, tz),
+        to: endOfDay(now, tz),
         label: "This week",
       };
     }
     case "month":
       return {
         preset,
-        from: startOfMonth(now),
-        to: endOfDay(now),
-        label: `${MONTH_NAMES[now.getMonth()]} ${now.getFullYear()}`,
+        from: startOfMonth(now, tz),
+        to: endOfDay(now, tz),
+        label: `${MONTH_NAMES[month]} ${year}`,
       };
     case "year":
       return {
         preset,
-        from: startOfYear(now),
-        to: endOfDay(now),
-        label: String(now.getFullYear()),
+        from: startOfYear(now, tz),
+        to: endOfDay(now, tz),
+        label: String(year),
       };
     case "custom":
       // Fallback only when parseRangeFromParams couldn't read from/to —
       // treat as "this month" so the user sees something useful.
-      return presetRange("month", now);
+      return presetRange("month", now, tz);
   }
 }
 
@@ -114,10 +117,11 @@ export type ParseResult = {
  */
 export function parseRangeFromParams(
   params: { range?: string; from?: string; to?: string },
-  now: Date = new Date()
+  now: Date = new Date(),
+  tz = 0
 ): ParseResult {
-  const fromDate = parseDateInput(params.from);
-  const toDate = parseDateInput(params.to);
+  const fromDate = parseDateInput(params.from, tz);
+  const toDate = parseDateInput(params.to, tz);
 
   if (fromDate && toDate) {
     let from = fromDate;
@@ -131,9 +135,9 @@ export function parseRangeFromParams(
     return {
       range: {
         preset: "custom",
-        from: startOfDay(from),
-        to: endOfDay(to),
-        label: `${formatShort(from)} – ${formatShort(to)}`,
+        from: startOfDay(from, tz),
+        to: endOfDay(to, tz),
+        label: `${formatShort(from, tz)} – ${formatShort(to, tz)}`,
       },
       warning,
     };
@@ -142,18 +146,19 @@ export function parseRangeFromParams(
   const preset = (params.range ?? "month") as RangePresetId;
   const valid: RangePresetId[] = ["today", "week", "month", "year"];
   const chosen = valid.includes(preset) ? preset : "month";
-  return { range: presetRange(chosen, now), warning: null };
+  return { range: presetRange(chosen, now, tz), warning: null };
 }
 
-function formatShort(d: Date): string {
-  return d.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: d.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined,
-  });
+function formatShort(d: Date, tz: number): string {
+  const { year, month, day } = localParts(d, tz);
+  const thisYear = localParts(new Date(), tz).year;
+  const base = `${String(day).padStart(2, "0")} ${MONTH_NAMES[month].slice(0, 3)}`;
+  return year === thisYear ? base : `${base} ${year}`;
 }
 
-export function toDateInput(d: Date): string {
+/** The YYYY-MM-DD a date falls on for the viewer — what a date input expects. */
+export function toDateInput(d: Date, tz = 0): string {
+  const { year, month, day } = localParts(d, tz);
   const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${year}-${pad(month + 1)}-${pad(day)}`;
 }
