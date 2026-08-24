@@ -2,8 +2,11 @@ import { NextRequest } from "next/server";
 import { getMobileUser } from "@/lib/auth/mobile";
 import { prisma } from "@/lib/prisma";
 import {
+  MONTH_NAMES,
   clampTzOffset,
   dayRange,
+  localMonthKey,
+  localParts,
   monthRange,
   weekRange,
   yearRange,
@@ -178,6 +181,41 @@ export async function GET(req: NextRequest) {
   const colorFor = (category: string) =>
     CATEGORY_COLORS[(yearRanking.get(category) ?? 0) % CATEGORY_COLORS.length];
 
+  // Twelve months of spending for the trend chart. The year query only covers
+  // this calendar year, so months from late last year need their own pass —
+  // still one extra query, not one per month.
+  const trendFrom = monthRange(now, tzOffset, -11).from;
+  const trendTxs =
+    trendFrom < year.from
+      ? await prisma.transaction.findMany({
+          where: {
+            userId: user.id,
+            type: "debit",
+            occurredAt: { gte: trendFrom, lt: year.from },
+          },
+          select: { amount: true, occurredAt: true },
+        })
+      : [];
+
+  const monthly: { key: string; label: string; total: number }[] = [];
+  for (let i = -11; i <= 0; i++) {
+    const r = monthRange(now, tzOffset, i);
+    const { year: yy, month: mm } = localParts(r.from, tzOffset);
+    monthly.push({
+      key: `${yy}-${String(mm + 1).padStart(2, "0")}`,
+      label: MONTH_NAMES[mm].slice(0, 3),
+      total: 0,
+    });
+  }
+  const monthlyByKey = new Map(monthly.map((m) => [m.key, m]));
+  const addToMonth = (at: Date, amount: number) => {
+    const bucket = monthlyByKey.get(localMonthKey(at, tzOffset));
+    if (bucket) bucket.total += amount;
+  };
+  for (const t of trendTxs) addToMonth(t.occurredAt, Number(t.amount));
+  for (const r of rows) if (r.type === "debit") addToMonth(new Date(r.at), r.amount);
+  for (const m of monthly) m.total = Math.round(m.total);
+
   const periods = Object.fromEntries(
     PERIODS.map((p) => {
       const r = p === "year" ? year : rangeFor(p, now, tzOffset);
@@ -194,5 +232,5 @@ export async function GET(req: NextRequest) {
       : "month"
   ];
 
-  return Response.json({ periods, ...legacy });
+  return Response.json({ periods, monthly, ...legacy });
 }

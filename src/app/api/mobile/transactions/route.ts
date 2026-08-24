@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { getMobileUser } from "@/lib/auth/mobile";
 import { prisma } from "@/lib/prisma";
+import { hasKnownTime } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,6 +23,7 @@ type TxnWithLines = {
   type: string;
   paymentMode: string;
   occurredAt: Date;
+  source: string;
   note: string | null;
   lines: {
     categoryId: string;
@@ -42,6 +44,9 @@ function serialize(t: TxnWithLines) {
     paymentMode: t.paymentMode,
     note: t.note,
     occurredAt: t.occurredAt.toISOString(),
+    // Lets the app tell a real timestamp from the noon placeholder that
+    // statement imports and date-only forms store.
+    timeKnown: hasKnownTime(t.occurredAt, t.source),
   };
 }
 

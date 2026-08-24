@@ -3,7 +3,7 @@ import { getMobileUser } from "@/lib/auth/mobile";
 import { prisma } from "@/lib/prisma";
 import { getBudgetProgress, getMonthOverMonthDelta } from "@/lib/budgets";
 import { getRangeSummary } from "@/lib/spending";
-import { clampTzOffset, monthRange } from "@/lib/time";
+import { clampTzOffset, hasKnownTime, monthRange } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -62,6 +62,7 @@ export async function GET(req: NextRequest) {
       type: t.type as "debit" | "credit",
       paymentMode: t.paymentMode,
       occurredAt: t.occurredAt.toISOString(),
+      timeKnown: hasKnownTime(t.occurredAt, t.source),
     };
   });
 

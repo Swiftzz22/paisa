@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import {
   MONTH_NAMES,
+  hasKnownTime,
   localMonthKey,
   localParts,
   monthRange,
@@ -20,6 +21,8 @@ export type TxRow = {
   categoryParentName: string | null;
   categoryRollupName: string; // parent name if leaf, else own name
   categoryId: string | null;
+  /** False for rows whose stored time is a date-only placeholder. */
+  timeKnown: boolean;
 };
 
 export type CategorySlice = {
@@ -128,6 +131,7 @@ export async function getRangeSummary(params: {
       categoryParentName: parent ? parent.name : null,
       categoryRollupName: cat ? parent?.name ?? cat.name : "Uncategorized",
       categoryId: firstLine?.categoryId ?? null,
+      timeKnown: hasKnownTime(t.occurredAt, t.source),
     };
   });
 
@@ -172,7 +176,7 @@ export async function getRangeSummary(params: {
   // Totals and charts above cover the whole (filtered) range; the rendered
   // list is capped to the most recent LIST_CAP so wide ranges ("This year")
   // don't ship hundreds of DOM rows. filteredRows is already newest-first.
-  const LIST_CAP = 100;
+  const LIST_CAP = 500;
   const listRows = filteredRows.slice(0, LIST_CAP);
   const byDay = groupByDay(listRows);
 

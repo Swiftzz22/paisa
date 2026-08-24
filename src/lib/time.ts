@@ -119,6 +119,34 @@ export function daysInLocalMonth(now: Date, tzOffset: number): number {
   return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 }
 
+/** "1:24 pm" in the viewer's zone, formatted by hand so it never varies. */
+export function clockTime(at: Date, tzOffset: number): string {
+  const shifted = new Date(at.getTime() + tzOffset * 60_000);
+  let h = shifted.getUTCHours();
+  const m = shifted.getUTCMinutes();
+  const suffix = h < 12 ? "am" : "pm";
+  h = h % 12 || 12;
+  return `${h}:${String(m).padStart(2, "0")} ${suffix}`;
+}
+
+/**
+ * Whether a transaction's clock time means anything.
+ *
+ * Bank emails carry a real timestamp (Gmail's internalDate). Statement imports
+ * and the web's date-only form do not — they store noon as a placeholder, so
+ * rendering "12:00 pm" invents a precision that was never there.
+ *
+ * Email rows are trusted outright. Everything else is judged on whether the
+ * instant looks machine-placed: a placeholder lands exactly on the minute,
+ * while a real timestamp practically never has both seconds and milliseconds
+ * at zero. That covers the mobile app's manual entries, which do record the
+ * moment they were added.
+ */
+export function hasKnownTime(occurredAt: Date, source?: string | null): boolean {
+  if (source === "email") return true;
+  return occurredAt.getSeconds() !== 0 || occurredAt.getMilliseconds() !== 0;
+}
+
 /** "YYYY-MM" for the local month an instant falls in — for bucketing. */
 export function localMonthKey(at: Date, tzOffset: number): string {
   const { year, month } = localParts(at, tzOffset);

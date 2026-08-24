@@ -10,7 +10,7 @@ import { recategorizeMiscAction } from "@/lib/actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { SegmentedRange } from "@/components/SegmentedRange";
 import { getBudgetProgress, getMonthOverMonthDelta } from "@/lib/budgets";
-import { dayRange, weekRange } from "@/lib/time";
+import { clockTime, dayRange, weekRange } from "@/lib/time";
 import { getTzOffset } from "@/lib/tz-server";
 
 export const dynamic = "force-dynamic";
@@ -128,7 +128,9 @@ export default async function Home({
   // Cap the rendered list so wide ranges ("This year") don't paint hundreds of
   // rows. Totals, budget, and the category breakdown above still reflect the
   // full range — only the scrolling list is trimmed to the most recent items.
-  const LIST_CAP = 40;
+  // Was 40, which cut a wide range off long before the 500 the query returns —
+  // "This year" showed a fortnight of rows and looked like data was missing.
+  const LIST_CAP = 500;
   let shownCount = 0;
   const cappedDays: typeof summary.byDay = [];
   for (const day of summary.byDay) {
@@ -252,7 +254,12 @@ export default async function Home({
                 </div>
                 <div className="overflow-hidden rounded-2xl border border-zinc-200/80 bg-white dark:border-zinc-800 dark:bg-zinc-900/40">
                   {day.txs.map((t, i) => (
-                    <TxItem key={t.id} t={t} last={i === day.txs.length - 1} />
+                    <TxItem
+                      key={t.id}
+                      t={t}
+                      last={i === day.txs.length - 1}
+                      tzOffset={tzOffset}
+                    />
                   ))}
                 </div>
               </div>
@@ -520,7 +527,15 @@ function SearchPill({
   );
 }
 
-function TxItem({ t, last }: { t: TxRow; last: boolean }) {
+function TxItem({
+  t,
+  last,
+  tzOffset,
+}: {
+  t: TxRow;
+  last: boolean;
+  tzOffset: number;
+}) {
   const isCredit = t.type === "credit";
   const v = catVisual(t.categoryRollupName);
   return (
@@ -546,6 +561,7 @@ function TxItem({ t, last }: { t: TxRow; last: boolean }) {
         </div>
         <div className="truncate text-xs text-zinc-400">
           {t.categoryRollupName} · {paymentModeLabel(t.paymentMode)}
+          {t.timeKnown ? ` · ${clockTime(t.occurredAt, tzOffset)}` : null}
         </div>
       </div>
       <div
