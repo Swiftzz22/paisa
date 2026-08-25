@@ -21,12 +21,34 @@ let lastCallAt = 0;
 /** Max emails sent in a single Gemini request. */
 export const BATCH_SIZE = 10;
 
-async function throttle(minIntervalMs: number = MIN_INTERVAL_MS): Promise<void> {
+/**
+ * Raised when the caller's time budget is spent. Pending emails stay pending,
+ * so the next tick simply picks them up.
+ */
+export class OutOfTimeError extends Error {
+  constructor() {
+    super("Ran out of time before the batch could be parsed.");
+  }
+}
+
+/** Milliseconds left for one model call, leaving room to finish the response. */
+function remainingBudget(deadline?: number): number {
+  if (deadline === undefined) return NVIDIA_TIMEOUT_MS;
+  return Math.min(NVIDIA_TIMEOUT_MS, deadline - Date.now() - 2_000);
+}
+
+async function throttle(
+  minIntervalMs: number = MIN_INTERVAL_MS,
+  deadline?: number
+): Promise<void> {
   const elapsed = Date.now() - lastCallAt;
   if (elapsed < minIntervalMs) {
-    await new Promise((resolve) =>
-      setTimeout(resolve, minIntervalMs - elapsed)
-    );
+    const wait = minIntervalMs - elapsed;
+    // Waiting past the deadline just guarantees the function is killed mid-call.
+    if (deadline !== undefined && Date.now() + wait >= deadline) {
+      throw new OutOfTimeError();
+    }
+    await new Promise((resolve) => setTimeout(resolve, wait));
   }
   lastCallAt = Date.now();
 }
@@ -56,14 +78,19 @@ function parseRetryAfter(msg: string): number | null {
  */
 export async function callGeminiWithBackoff<T>(
   makeRequest: () => Promise<T>,
-  opts?: { maxAttempts?: number; minIntervalMs?: number }
+  opts?: { maxAttempts?: number; minIntervalMs?: number; deadline?: number }
 ): Promise<T> {
   const maxAttempts = opts?.maxAttempts ?? 3;
+  const deadline = opts?.deadline;
+  /** True when `ms` of waiting would leave no room to actually retry. */
+  const cannotAfford = (ms: number) =>
+    deadline !== undefined && Date.now() + ms >= deadline;
+
   let lastRetrySec = 60;
   let overloadRetries = 0;
   const MAX_OVERLOAD_RETRIES = 2;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    await throttle(opts?.minIntervalMs);
+    await throttle(opts?.minIntervalMs, deadline);
     try {
       return await makeRequest();
     } catch (e) {
@@ -72,13 +99,17 @@ export async function callGeminiWithBackoff<T>(
       // spikes that are usually brief. Retry quickly a couple of times without
       // consuming the rate-limit attempt budget; if it persists, surface a clean
       // message instead of the raw error JSON.
+      if (e instanceof OutOfTimeError) throw e;
       if (/\b503\b|UNAVAILABLE|overloaded|high demand/i.test(msg)) {
-        if (overloadRetries < MAX_OVERLOAD_RETRIES) {
+        // Each retry is another full-length model call, so only take one if
+        // there is genuinely room for it.
+        if (overloadRetries < MAX_OVERLOAD_RETRIES && !cannotAfford(1500)) {
           overloadRetries++;
           attempt--;
           await new Promise((r) => setTimeout(r, 1500));
           continue;
         }
+        if (cannotAfford(1500)) throw new OutOfTimeError();
         throw new Error(
           "The AI model is briefly overloaded on Google's side. Please try again in a few seconds."
         );
@@ -88,6 +119,9 @@ export async function callGeminiWithBackoff<T>(
       lastRetrySec = retrySec;
       if (attempt === maxAttempts) break;
       const sleepMs = Math.min(retrySec + 3, 90) * 1000;
+      // This sleep can be up to 90s — longer than a serverless function is
+      // allowed to live. Give up cleanly rather than being killed mid-wait.
+      if (cannotAfford(sleepMs)) throw new OutOfTimeError();
       console.log(
         `[gemini] 429 (attempt ${attempt}/${maxAttempts}), waiting ${sleepMs}ms`
       );
@@ -138,7 +172,8 @@ export function isGeminiConfigured(): boolean {
  */
 async function nvidiaJsonArray(
   systemPrompt: string,
-  userContent: string
+  userContent: string,
+  deadline?: number
 ): Promise<unknown[]> {
   const apiKey = process.env.NVIDIA_API_KEY;
   if (!apiKey) {
@@ -146,8 +181,13 @@ async function nvidiaJsonArray(
       "NVIDIA_API_KEY is not set. Get a free key at https://build.nvidia.com"
     );
   }
+  // Never outlast the caller's budget. A serverless sync gets 60s in total, so
+  // a call that ran the full 25s on top of retries was enough to have the whole
+  // function killed — and a killed function reports nothing at all.
+  const budget = remainingBudget(deadline);
+  if (budget <= 0) throw new OutOfTimeError();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), NVIDIA_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), budget);
   let res: Response;
   try {
     res = await fetch(NVIDIA_URL, {
@@ -171,7 +211,7 @@ async function nvidiaJsonArray(
   } catch (e) {
     if (controller.signal.aborted) {
       throw new Error(
-        `NVIDIA request timed out after ${NVIDIA_TIMEOUT_MS / 1000}s.`
+        `NVIDIA request timed out after ${Math.round(budget / 1000)}s.`
       );
     }
     throw e;
@@ -259,6 +299,8 @@ MUST equal the number of input emails. payment_mode and kind are lowercase.`;
 export async function extractTransactionBatch(params: {
   emails: EmailInput[];
   categories: CategoryChoice[];
+  /** Epoch ms the caller must return by; the model call is capped to fit. */
+  deadline?: number;
 }): Promise<Map<string, ExtractedTransaction>> {
   if (params.emails.length === 0) return new Map();
 
@@ -288,7 +330,8 @@ export async function extractTransactionBatch(params: {
 
   const rawArray = (await nvidiaJsonArray(
     BASE_PROMPT,
-    userContent
+    userContent,
+    params.deadline
   )) as BatchExtraction[];
 
   const out = new Map<string, ExtractedTransaction>();

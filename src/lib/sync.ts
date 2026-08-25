@@ -19,7 +19,9 @@ const BACKFILL_CHUNK_SIZE = 50;
  * resumable (backfill walks backward from the oldest stored email, and the
  * pending queue lives in the database).
  */
-export const TICK_BUDGET_MS = 45_000;
+// 38s rather than 45s: a cold start and the Prisma/Turso connection happen
+// before this timer starts, and that head start counts against the same 60s.
+export const TICK_BUDGET_MS = 38_000;
 
 /** Headroom the parse phase needs before it's worth starting at all. */
 const PARSE_RESERVE_MS = 20_000;
@@ -177,7 +179,7 @@ export async function runSyncForUser(
     // "not past the deadline" — starting this with two seconds left is how the
     // tick overran even with a budget in place.
     if (isGeminiConfigured() && timeLeft() >= PARSE_RESERVE_MS) {
-      const result = await processPendingForUser(userId);
+      const result = await processPendingForUser(userId, undefined, deadline);
       status.processed.parsed = result.parsed;
       status.processed.ignored = result.ignored;
       status.processed.failed = result.failed;

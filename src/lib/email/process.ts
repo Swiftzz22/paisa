@@ -5,6 +5,7 @@ import {
   extractTransactionBatch,
   isGeminiConfigured,
   GeminiRateLimitError,
+  OutOfTimeError,
   BATCH_SIZE,
   type CategoryChoice,
   type EmailInput,
@@ -37,7 +38,8 @@ export type ProcessResult = {
  */
 export async function processPendingForUser(
   userId: string,
-  maxToProcess: number = BATCH_SIZE
+  maxToProcess: number = BATCH_SIZE,
+  deadline?: number
 ): Promise<ProcessResult> {
   const pending = await prisma.receivedEmail.findMany({
     where: { userId, parseStatus: { in: ["pending", "failed"] } },
@@ -126,8 +128,14 @@ export async function processPendingForUser(
       results = await extractTransactionBatch({
         emails: inputs,
         categories: choices,
+        deadline,
       });
     } catch (e) {
+      if (e instanceof OutOfTimeError) {
+        // Leave the batch pending and return what we have — being killed
+        // mid-call instead would lose the whole run's result.
+        break;
+      }
       if (e instanceof GeminiRateLimitError) {
         rateLimitedAfter = e.retryAfterSeconds;
         break; // leave the batch pending; user retries when ready
