@@ -38,6 +38,53 @@ const PAYMENT_LABELS: Record<string, string> = {
 const PERIODS = ["day", "week", "month", "year"] as const;
 type Period = (typeof PERIODS)[number];
 
+/** "12 Aug – 3 Sep 2026" in the viewer's timezone. */
+function rangeLabel(from: Date, to: Date, tzOffset: number): string {
+  const a = localParts(from, tzOffset);
+  const b = localParts(to, tzOffset);
+  const short = (p: typeof a) => `${p.day} ${MONTH_NAMES[p.month].slice(0, 3)}`;
+  return a.year === b.year
+    ? `${short(a)} – ${short(b)} ${b.year}`
+    : `${short(a)} ${a.year} – ${short(b)} ${b.year}`;
+}
+
+/** Transactions in a window, flattened to what the summariser needs. */
+async function loadRows(userId: string, from: Date, to: Date): Promise<Row[]> {
+  const txs = await prisma.transaction.findMany({
+    where: { userId, occurredAt: { gte: from, lte: to } },
+    include: { lines: { include: { category: { include: { parent: true } } } } },
+  });
+  return txs.map((t) => {
+    const cat = t.lines[0]?.category ?? null;
+    const parent = cat?.parent ?? null;
+    return {
+      at: t.occurredAt.getTime(),
+      amount: Number(t.amount),
+      type: t.type === "credit" ? "credit" : "debit",
+      category: parent?.name ?? cat?.name ?? "Uncategorized",
+      mode: t.paymentMode,
+    };
+  });
+}
+
+/**
+ * Colour per category, ranked by spend, so a category keeps one colour across
+ * every period rather than changing with each period's local ordering.
+ */
+function buildColorMap(rows: Row[]): (category: string) => string {
+  const totals = new Map<string, number>();
+  for (const r of rows) {
+    if (r.type !== "debit") continue;
+    totals.set(r.category, (totals.get(r.category) ?? 0) + r.amount);
+  }
+  const rank = new Map<string, number>();
+  Array.from(totals.entries())
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([name], i) => rank.set(name, i));
+  return (category: string) =>
+    CATEGORY_COLORS[(rank.get(category) ?? 0) % CATEGORY_COLORS.length];
+}
+
 function rangeFor(period: Period, now: Date, tzOffset: number): Range {
   if (period === "day") return dayRange(now, tzOffset);
   if (period === "week") return weekRange(now, tzOffset);
@@ -144,42 +191,30 @@ export async function GET(req: NextRequest) {
 
   const tzOffset = clampTzOffset(req.nextUrl.searchParams.get("tzOffset"));
   const now = new Date();
+
+  // An explicit window (a custom range, or one month picked off the trend
+  // chart). The app summarises this locally for an instant result, but its
+  // history is capped, so this is the authoritative answer it corrects to.
+  const fromParam = req.nextUrl.searchParams.get("from");
+  const toParam = req.nextUrl.searchParams.get("to");
+  if (fromParam && toParam) {
+    const from = new Date(fromParam);
+    const to = new Date(toParam);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+      return Response.json({ error: "Bad range." }, { status: 400 });
+    }
+    const [lo, hi] = from <= to ? [from, to] : [to, from];
+    const rangeRows = await loadRows(user.id, lo, hi);
+    const colorFor = buildColorMap(rangeRows);
+    return Response.json({
+      range: summarize(rangeRows, "month", lo, hi, rangeLabel(lo, hi, tzOffset), colorFor),
+    });
+  }
   const year = rangeFor("year", now, tzOffset);
 
-  const txs = await prisma.transaction.findMany({
-    where: {
-      userId: user.id,
-      occurredAt: { gte: year.from, lte: year.to },
-    },
-    include: { lines: { include: { category: { include: { parent: true } } } } },
-  });
-
-  const rows: Row[] = txs.map((t) => {
-    const cat = t.lines[0]?.category ?? null;
-    const parent = cat?.parent ?? null;
-    return {
-      at: t.occurredAt.getTime(),
-      amount: Number(t.amount),
-      type: t.type === "credit" ? "credit" : "debit",
-      category: parent?.name ?? cat?.name ?? "Uncategorized",
-      mode: t.paymentMode,
-    };
-  });
-
-  // Colours are assigned from the year's ranking so a category keeps the same
-  // colour in every period — otherwise Food could be blue on Year and green on
-  // Week, which makes switching tabs read as unrelated charts.
-  const yearRanking = new Map<string, number>();
-  const totals = new Map<string, number>();
-  for (const r of rows) {
-    if (r.type !== "debit") continue;
-    totals.set(r.category, (totals.get(r.category) ?? 0) + r.amount);
-  }
-  Array.from(totals.entries())
-    .sort((a, b) => b[1] - a[1])
-    .forEach(([name], i) => yearRanking.set(name, i));
-  const colorFor = (category: string) =>
-    CATEGORY_COLORS[(yearRanking.get(category) ?? 0) % CATEGORY_COLORS.length];
+  const rows = await loadRows(user.id, year.from, year.to);
+  // Ranked over the year, so a category keeps one colour in every period.
+  const colorFor = buildColorMap(rows);
 
   // Twelve months of spending for the trend chart. The year query only covers
   // this calendar year, so months from late last year need their own pass —
