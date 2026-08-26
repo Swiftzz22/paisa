@@ -34,7 +34,12 @@ export const FINANCIAL_DOMAIN_PATTERNS = [
   "phonepe",
   "paytm",
   "googlepay",
-  "google.com", // GPay receipts come from no-reply@google.com
+  // Narrowed from a bare "google.com": that also matched docs.google.com and
+  // comments-noreply@google.com, so anyone who knew the address could push
+  // attacker-written text (a doc share, a comment) into the parser's prompt.
+  "no-reply@google.com",
+  "payments-noreply@google.com",
+  "payments.google.com",
   "bhim",
   "cred.club",
   "amazonpay",

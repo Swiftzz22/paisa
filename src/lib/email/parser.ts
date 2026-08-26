@@ -31,6 +31,21 @@ export class OutOfTimeError extends Error {
   }
 }
 
+/**
+ * Neutralise the markers this prompt uses to separate one email from the next.
+ *
+ * Email bodies are written by whoever sent them. Left alone, text that mimics
+ * the "--- EMAIL n of m ---" / "email_id:" framing can pose as another entry in
+ * the batch and overwrite or suppress a real transaction's result. Breaking the
+ * markers costs the model nothing — it still reads the words either way.
+ */
+function defuse(text: string): string {
+  return text
+    .replace(/-{3,}\s*EMAIL/gi, "- EMAIL")
+    .replace(/^\s*email_id\s*:/gim, "email id -")
+    .replace(/^\s*(From|Subject|Body)\s*:/gim, "$1 -");
+}
+
 /** Milliseconds left for one model call, leaving room to finish the response. */
 function remainingBudget(deadline?: number): number {
   if (deadline === undefined) return NVIDIA_TIMEOUT_MS;
@@ -308,12 +323,12 @@ export async function extractTransactionBatch(params: {
 
   const emailsBlock = params.emails
     .map((e, i) => {
-      const body = pickBody(e.bodyText, e.rawHtml).slice(0, 4000);
+      const body = defuse(pickBody(e.bodyText, e.rawHtml).slice(0, 4000));
       return [
         `--- EMAIL ${i + 1} of ${params.emails.length} ---`,
         `email_id: ${e.id}`,
-        `From: ${e.fromAddress}`,
-        `Subject: ${e.subject}`,
+        `From: ${defuse(e.fromAddress)}`,
+        `Subject: ${defuse(e.subject)}`,
         `Email date: ${e.emailReceivedAt.toISOString()}`,
         "Body:",
         body,
@@ -334,9 +349,14 @@ export async function extractTransactionBatch(params: {
     params.deadline
   )) as BatchExtraction[];
 
+  // Only ids we actually sent are accepted. Without this, an id conjured from
+  // injected body text could attach a fabricated transaction to another email.
+  const sentIds = new Set(params.emails.map((e) => e.id));
+
   const out = new Map<string, ExtractedTransaction>();
   for (const item of rawArray) {
     if (!item || typeof item.email_id !== "string") continue;
+    if (!sentIds.has(item.email_id)) continue;
     const pm =
       typeof item.payment_mode === "string"
         ? item.payment_mode.toLowerCase()

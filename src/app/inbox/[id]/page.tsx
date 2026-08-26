@@ -62,11 +62,13 @@ export default async function InboxDetailPage({
           </h2>
           {/* Untrusted email HTML — render in a fully sandboxed iframe
               (sandbox="" disables scripts, forms, and same-origin access) so a
-              crafted email can't run code in the user's session. */}
+              crafted email can't run code in the user's session. The CSP also
+              blocks remote loads, so tracking pixels can't report the reader's
+              IP address and reading time back to whoever sent the mail. */}
           <iframe
             title="Email HTML body"
             sandbox=""
-            srcDoc={email.rawHtml}
+            srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">${email.rawHtml}`}
             className="h-96 w-full rounded-md border border-zinc-200 bg-white dark:border-zinc-800"
           />
           <details className="mt-3">

@@ -60,11 +60,14 @@ export async function POST(req: NextRequest) {
         { status: 429 }
       );
     }
-    // Surface the real reason. This route is Bearer-authed and single-user, and
-    // a generic message here meant a broken key or a dead upstream looked
-    // identical to a model hiccup — with no way to tell them apart from the app.
+    // Log the real reason, return a safe one. Upstream messages can carry
+    // provider internals, and now that strangers share this deployment they
+    // are not the caller's to read.
     const detail = e instanceof Error ? e.message : String(e);
     console.error("[mobile/ask] failed:", detail);
-    return Response.json({ error: `Ask failed — ${detail}` }, { status: 500 });
+    return Response.json(
+      { error: "Couldn't answer that just now. Please try again." },
+      { status: 500 }
+    );
   }
 }

@@ -22,6 +22,7 @@ export async function reconcileTransactionDates(userId: string): Promise<number>
       SELECT "ReceivedEmail"."receivedAt"
       FROM "ReceivedEmail"
       WHERE "ReceivedEmail"."id" = "Transaction"."emailId"
+        AND "ReceivedEmail"."userId" = ${userId}
     )
     WHERE "Transaction"."userId" = ${userId}
       AND "Transaction"."emailId" IS NOT NULL

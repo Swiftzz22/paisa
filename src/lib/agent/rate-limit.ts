@@ -1,12 +1,14 @@
 import "server-only";
 
 /**
- * Lightweight in-memory rate limiting and daily cap for /api/ask.
+ * Lightweight in-memory rate limiting and daily cap.
  *
- * Scope assumptions (single-user personal app):
- *   - State lives in this Node process only. Restarting the dev server resets
- *     all counters. That's fine for personal use; if we ever multi-user
- *     deploy, this moves to Redis or a DB row.
+ * Scope assumptions:
+ *   - State lives in this Node process only. On Vercel each warm instance keeps
+ *     its own counters, so the effective limit is (instances x limit) — this
+ *     slows a runaway client but does NOT stop a determined one. Before opening
+ *     signups to strangers, move these buckets to the database or Redis so the
+ *     cap is actually shared.
  *   - The "day" is UTC. Good enough for a soft cap; we're not billing.
  *
  * Two limits, intentional:
@@ -83,6 +85,35 @@ export function checkAndRecord(userId: string): RateCheck {
   bucket.times.push(now);
   daily.count += 1;
   return { ok: true, dailyUsed: daily.count, dailyCap: DAILY_CAP };
+}
+
+const SYNC_PER_MINUTE = 6;
+const syncByUser = new Map<string, number[]>();
+
+/**
+ * Cap on-demand syncs. A sync costs a Gmail fetch plus an LLM batch, and the
+ * model quota is shared across everyone — so this is really protecting other
+ * users, not the server. Pull-to-refresh in normal use stays well under it.
+ */
+export function checkSyncRate(userId: string): RateCheck {
+  const now = Date.now();
+  const cutoff = now - 60_000;
+  const times = (syncByUser.get(userId) ?? []).filter((t) => t > cutoff);
+
+  if (times.length >= SYNC_PER_MINUTE) {
+    const retry = Math.max(1, Math.ceil((times[0] + 60_000 - now) / 1000));
+    syncByUser.set(userId, times);
+    return {
+      ok: false,
+      reason: "rpm",
+      retryAfterSeconds: retry,
+      message: `Syncing too often. Try again in ${retry}s.`,
+    };
+  }
+
+  times.push(now);
+  syncByUser.set(userId, times);
+  return { ok: true, dailyUsed: times.length, dailyCap: SYNC_PER_MINUTE };
 }
 
 export function getDailyUsage(userId: string): { used: number; cap: number } {

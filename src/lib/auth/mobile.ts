@@ -2,6 +2,7 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import type { SessionUser } from "@/lib/auth/session";
+import { MOBILE_TOKEN_PREFIX, isMobileToken } from "@/lib/auth/token-kind";
 
 const MOBILE_TOKEN_DAYS = 365;
 
@@ -11,7 +12,7 @@ const MOBILE_TOKEN_DAYS = 365;
  * paste into the app instead of being set as a cookie.
  */
 export async function createMobileToken(userId: string): Promise<string> {
-  const token = "pmt_" + randomBytes(32).toString("hex");
+  const token = MOBILE_TOKEN_PREFIX + randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + MOBILE_TOKEN_DAYS * 24 * 60 * 60 * 1000);
   await prisma.session.create({ data: { token, userId, expiresAt } });
   return token;
@@ -25,6 +26,9 @@ export async function getMobileUser(
   const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
   const token = match?.[1];
   if (!token) return null;
+  // A browser session cookie is not a device credential, even though both are
+  // Session rows.
+  if (!isMobileToken(token)) return null;
 
   const session = await prisma.session.findUnique({
     where: { token },

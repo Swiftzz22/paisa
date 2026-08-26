@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { runSyncTick, TICK_BUDGET_MS } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
@@ -21,8 +22,13 @@ export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET;
 
   if (secret) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
+    const auth = req.headers.get("authorization") ?? "";
+    const expected = `Bearer ${secret}`;
+    // Constant-time so response latency can't be used to recover the secret
+    // a character at a time. Lengths must match before timingSafeEqual.
+    const a = Buffer.from(auth);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
   } else if (process.env.NODE_ENV === "production") {

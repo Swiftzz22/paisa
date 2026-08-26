@@ -11,7 +11,10 @@ export const runtime = "nodejs";
  * (usernameless / "just tap and use your fingerprint").
  */
 export async function POST(req: NextRequest) {
-  const { rpID } = getRpConfig(req.headers.get("host") || "localhost");
+  const rp = getRpConfig(req.headers.get("host") || "localhost");
+  // Unrecognised host: refuse rather than trust whatever was claimed.
+  if (!rp) return Response.json({ error: "Unknown host" }, { status: 400 });
+  const { rpID } = rp;
   const options = await generateAuthenticationOptions({
     rpID,
     userVerification: "preferred",

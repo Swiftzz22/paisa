@@ -30,7 +30,10 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Unrecognized passkey." }, { status: 400 });
   }
 
-  const { rpID, origin } = getRpConfig(req.headers.get("host") || "localhost");
+  const rp = getRpConfig(req.headers.get("host") || "localhost");
+  // Unrecognised host: refuse rather than trust whatever was claimed.
+  if (!rp) return Response.json({ error: "Unknown host" }, { status: 400 });
+  const { rpID, origin } = rp;
 
   let verification;
   try {

@@ -2,6 +2,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
+import { isMobileToken } from "@/lib/auth/token-kind";
 
 const COOKIE_NAME = "paisa_session";
 const SESSION_DAYS = 30;
@@ -40,6 +41,9 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   const jar = await cookies();
   const token = jar.get(COOKIE_NAME)?.value;
   if (!token) return null;
+  // A long-lived device token must not be usable as a browser session just by
+  // being pasted into the cookie.
+  if (isMobileToken(token)) return null;
 
   const session = await prisma.session.findUnique({
     where: { token },

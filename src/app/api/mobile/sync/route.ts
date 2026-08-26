@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getMobileUser } from "@/lib/auth/mobile";
 import { runSyncForUser, getLastSyncRun, TICK_BUDGET_MS } from "@/lib/sync";
 import { reconcileTransactionDates } from "@/lib/reconcile-dates";
+import { checkSyncRate } from "@/lib/agent/rate-limit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,6 +23,19 @@ const inFlight = new Set<string>();
 export async function POST(req: NextRequest) {
   const user = await getMobileUser(req.headers.get("authorization"));
   if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  // Each call costs a Gmail fetch plus an LLM batch, and the shared model quota
+  // is the scarce resource — one account hammering this degrades everyone.
+  const limit = checkSyncRate(user.id);
+  if (!limit.ok) {
+    return Response.json(
+      { error: limit.message, fetched: 0, parsed: 0 },
+      {
+        status: 429,
+        headers: { "Retry-After": String(limit.retryAfterSeconds) },
+      }
+    );
+  }
 
   if (inFlight.has(user.id)) {
     const last = getLastSyncRun(user.id);

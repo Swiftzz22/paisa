@@ -15,7 +15,10 @@ export async function POST(req: NextRequest) {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "Not signed in." }, { status: 401 });
 
-  const { rpID, rpName } = getRpConfig(req.headers.get("host") || "localhost");
+  const rp = getRpConfig(req.headers.get("host") || "localhost");
+  // Unrecognised host: refuse rather than trust whatever was claimed.
+  if (!rp) return Response.json({ error: "Unknown host" }, { status: 400 });
+  const { rpID, rpName } = rp;
   const existing = await prisma.passkey.findMany({
     where: { userId: user.id },
     select: { credentialId: true, transports: true },

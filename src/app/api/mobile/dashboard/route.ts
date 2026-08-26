@@ -66,8 +66,16 @@ export async function GET(req: NextRequest) {
     };
   });
 
+  // Lets the app tell "still looking through your inbox" apart from "you never
+  // connected an inbox" — the same empty screen otherwise.
+  const emailAccount = await prisma.emailAccount.findUnique({
+    where: { userId: user.id },
+    select: { accountEmail: true },
+  });
+
   return Response.json({
     user: { name: user.name, email: user.email },
+    emailConnected: emailAccount !== null,
     monthLabel: budget.monthLabel,
     spent: Math.round(mom.thisMonth),
     // fraction, e.g. -0.12 = down 12%
