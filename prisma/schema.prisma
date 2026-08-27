@@ -21,6 +21,13 @@ model User {
   // email cannot be used to recognise them — a user signing in with Apple may
   // present an @privaterelay.appleid.com address that matches nothing.
   appleSub  String?  @unique
+  // Apple's refresh token, AES-256-GCM encrypted like the Gmail one. Obtained
+  // by exchanging the authorization code at sign-in — it has to be captured
+  // then, because the code is single-use and expires in five minutes. Apple
+  // requires it later: deleting an account must revoke the grant, and the
+  // revoke endpoint accepts nothing else.
+  appleRefreshTokenEnc String?
+  appleLinkedAt        DateTime?
   // Random label in this user's private forwarding address
   // (<inboundKey>@in.<domain>). Bank alerts forwarded there are ingested as if
   // we had read them from the mailbox — which is how the app avoids holding
@@ -57,6 +64,21 @@ model MobileAuthCode {
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+}
+
+/// Server-issued nonce for a Sign in with Apple attempt.
+///
+/// Apple echoes the nonce back verbatim on the native flow rather than hashing
+/// it, so a client-chosen value proves nothing — the client could replay its
+/// own token along with its own nonce. Only a value this server issued and
+/// remembers rules that out. Separate from MobileAuthCode because a nonce is
+/// issued before anyone is identified, so it has no user to belong to.
+model AppleNonce {
+  nonce     String   @id
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 
   @@index([expiresAt])
 }

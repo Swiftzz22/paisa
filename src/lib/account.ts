@@ -2,12 +2,21 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { getRefreshToken } from "@/lib/email/account";
 import { revokeToken } from "@/lib/email/google-oauth";
+import { revokeAppleToken } from "@/lib/auth/apple-login";
+import { decrypt } from "@/lib/crypto";
 
 export type DeleteAccountResult = {
   transactions: number;
   emails: number;
   categories: number;
   googleAccessRevoked: boolean;
+  appleAccessRevoked: boolean;
+  /**
+   * True when the account used Sign in with Apple but we held no refresh token
+   * to revoke — the caller should tell the user to remove paisa. themselves in
+   * iOS Settings, which is Apple's own sanctioned fallback.
+   */
+  appleNeedsManualRevoke: boolean;
 };
 
 /**
@@ -39,6 +48,30 @@ export async function deleteAccount(userId: string): Promise<DeleteAccountResult
     // Already revoked, or Google unreachable. Deleting our copy still matters.
   }
 
+  // Apple requires the grant to be revoked when an account is deleted, and the
+  // revoke endpoint accepts nothing but the refresh token — which is why it is
+  // captured at sign-in rather than here.
+  let appleAccessRevoked = false;
+  let appleNeedsManualRevoke = false;
+  try {
+    const u = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { appleSub: true, appleRefreshTokenEnc: true },
+    });
+    if (u?.appleSub) {
+      if (u.appleRefreshTokenEnc) {
+        await revokeAppleToken(decrypt(u.appleRefreshTokenEnc));
+        appleAccessRevoked = true;
+      } else {
+        // Apple's sanctioned fallback: delete anyway, and point the user at
+        // Settings. Deletion must never block on Apple.
+        appleNeedsManualRevoke = true;
+      }
+    }
+  } catch {
+    appleNeedsManualRevoke = true;
+  }
+
   return prisma.$transaction(async (tx) => {
     // Transactions first: ExpenseLine cascades from them, which clears the
     // references blocking Category.
@@ -66,6 +99,8 @@ export async function deleteAccount(userId: string): Promise<DeleteAccountResult
       emails: emails.count,
       categories: children.count + parents.count,
       googleAccessRevoked,
+      appleAccessRevoked,
+      appleNeedsManualRevoke,
     };
   });
 }
