@@ -6,6 +6,10 @@ import { getCurrentUser } from "@/lib/user";
 import { exchangeLoginCode } from "@/lib/auth/google-login";
 import { resolveUserForLogin } from "@/lib/auth/users";
 import { createSession } from "@/lib/auth/session";
+import {
+  createMobileAuthCode,
+  isAllowedReturnUrl,
+} from "@/lib/auth/mobile-login";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +27,43 @@ export async function GET(req: Request) {
   const error = url.searchParams.get("error");
 
   const cookieStore = await cookies();
+  const mobileState = cookieStore.get("mobile_login_state")?.value;
   const loginState = cookieStore.get("login_state")?.value;
+
+  // -------- APP SIGN-IN flow --------
+  // Same Google exchange as the browser login below, but the result goes back
+  // to the app as a one-time code on its deep link rather than a session
+  // cookie. The token itself is never put in the URL — deep links surface in
+  // system logs — so the app trades the code for it over HTTPS.
+  if (mobileState) {
+    cookieStore.delete("mobile_login_state");
+    const returnUrl = cookieStore.get("mobile_return")?.value ?? "";
+    cookieStore.delete("mobile_return");
+
+    // Re-check: the cookie is ours, but this is the value that decides where a
+    // sign-in code is delivered.
+    if (!isAllowedReturnUrl(returnUrl)) {
+      return NextResponse.json(
+        { error: "Unrecognised return URL." },
+        { status: 400 }
+      );
+    }
+    const back = (params: Record<string, string>) =>
+      NextResponse.redirect(`${returnUrl}?${new URLSearchParams(params)}`);
+
+    if (error) return back({ error: `Google declined: ${error}` });
+    if (!code || !state) return back({ error: "Missing code or state." });
+    if (mobileState !== state) return back({ error: "Sign-in state mismatch." });
+
+    try {
+      const identity = await exchangeLoginCode(code);
+      const { id: userId } = await resolveUserForLogin(identity);
+      return back({ code: await createMobileAuthCode(userId) });
+    } catch (e) {
+      console.error("[mobile sign-in callback] failed:", e);
+      return back({ error: "Sign-in failed. Please try again." });
+    }
+  }
 
   // -------- LOGIN flow --------
   if (loginState) {

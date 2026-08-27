@@ -39,11 +39,28 @@ model User {
   budgets             Budget[]
   sessions            Session[]
   passkeys            Passkey[]
+  mobileAuthCodes     MobileAuthCode[]
 }
 
 /// A WebAuthn passkey (biometric / device credential) bound to a user. The
 /// private key never leaves the user's device; we store only the public key,
 /// the credential id, and a signature counter for replay detection.
+/// Short-lived one-time code handed to the app after a browser sign-in.
+///
+/// The bearer token is never put in the redirect URL: deep-link URLs end up in
+/// system logs and can be surfaced by the OS, so the app receives a code it
+/// immediately trades for the real token over HTTPS. Single use, two minutes.
+model MobileAuthCode {
+  code      String   @id
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+}
+
 model Passkey {
   id           String   @id @default(uuid())
   userId       String
