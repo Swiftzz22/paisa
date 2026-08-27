@@ -103,6 +103,26 @@ export default async function SettingsIndex() {
           </button>
         </form>
       </section>
+
+      <section className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+            Delete account
+          </div>
+          <p className="mt-0.5 text-sm text-zinc-600 dark:text-zinc-400">
+            Removes every transaction, stored email and setting. Permanent.
+          </p>
+        </div>
+        <Link href="/settings/delete-account" className="btn-danger">
+          Delete account
+        </Link>
+      </section>
+
+      <p className="mt-6 text-center text-xs text-zinc-500">
+        <Link href="/privacy" className="hover:underline">
+          Privacy policy
+        </Link>
+      </p>
     </main>
   );
 }

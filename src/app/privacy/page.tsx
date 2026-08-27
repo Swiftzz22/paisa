@@ -1,0 +1,223 @@
+import Link from "next/link";
+
+export const metadata = {
+  title: "Privacy Policy — paisa.",
+  description:
+    "What paisa. collects, why, who it is shared with, and how to delete it.",
+};
+
+const UPDATED = "25 August 2026";
+
+/**
+ * Public privacy policy. Required three times over: App Store Connect demands a
+ * URL, Google's OAuth verification requires one that specifically describes how
+ * Google user data is handled, and India's DPDP Act will require it from 2027.
+ *
+ * Deliberately specific rather than boilerplate — it names the third parties,
+ * because a vague policy is what fails a Google review, and because "we take
+ * your privacy seriously" tells a reader nothing.
+ */
+export default function PrivacyPolicy() {
+  return (
+    <main className="mx-auto w-full max-w-2xl px-4 py-10 sm:px-6 sm:py-14">
+      <header className="mb-8">
+        <Link
+          href="/"
+          className="text-sm text-zinc-600 hover:underline dark:text-zinc-400"
+        >
+          ← paisa.
+        </Link>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+          Privacy Policy
+        </h1>
+        <p className="mt-2 text-sm text-zinc-500">Last updated {UPDATED}</p>
+      </header>
+
+      <div className="space-y-8 text-[15px] leading-relaxed text-zinc-700 dark:text-zinc-300">
+        <section>
+          <p>
+            paisa. reads the transaction alerts your bank emails you and turns
+            them into a record of your spending. This page explains exactly what
+            that involves. It is written to be read, not to be survived.
+          </p>
+        </section>
+
+        <Section title="What is collected">
+          <Item label="Your account">
+            Name, email address and profile picture, from Google when you sign
+            in.
+          </Item>
+          <Item label="Bank alert emails">
+            If you connect Gmail, paisa. reads messages from a fixed list of
+            banks, card issuers and UPI apps. It stores the full contents of
+            those messages, including the original HTML, so a transaction can be
+            re-read if the extraction was wrong.
+          </Item>
+          <Item label="Your transactions">
+            Merchant, amount, date, payment method, category, and any notes you
+            add — whether they came from an email, a statement you uploaded, or
+            were typed in by hand.
+          </Item>
+          <Item label="What you ask">
+            Questions you put to the Ask feature, and the answers.
+          </Item>
+          <p className="mt-3 text-sm text-zinc-500">
+            No advertising identifiers, no analytics SDKs, no location, no
+            contacts, no tracking across other apps or websites.
+          </p>
+        </Section>
+
+        <Section title="What paisa. can and cannot do with Gmail">
+          <p>
+            paisa. requests read-only access. It cannot send email, delete
+            anything, or change your mailbox in any way. It only reads messages
+            from known financial senders — a promotional email or a message from
+            a friend is not read or stored.
+          </p>
+          <p className="mt-3">
+            paisa.&rsquo;s use of information from Google APIs follows the{" "}
+            <a
+              className="underline"
+              href="https://developers.google.com/terms/api-services-user-data-policy"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Google API Services User Data Policy
+            </a>
+            , including its Limited Use requirements. That data is never sold,
+            never used for advertising, and never used to train any machine
+            learning model.
+          </p>
+          <p className="mt-3">
+            You can disconnect Gmail at any time in Settings, or revoke access
+            directly at{" "}
+            <a
+              className="underline"
+              href="https://myaccount.google.com/permissions"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              your Google account permissions
+            </a>
+            .
+          </p>
+        </Section>
+
+        <Section title="Who else sees your data">
+          <p>
+            paisa. is run by one person and your data is not sold, rented or
+            shared for marketing. It reaches exactly three companies, all as
+            infrastructure:
+          </p>
+          <Item label="An AI provider">
+            The contents of a bank alert are sent to a language model to extract
+            the merchant, amount and category, and your spending totals are sent
+            when you use Ask. The provider is contractually barred from training
+            on it.
+          </Item>
+          <Item label="Vercel">
+            Runs the servers.
+          </Item>
+          <Item label="Turso">
+            Stores the database.
+          </Item>
+        </Section>
+
+        <Section title="How long it is kept">
+          <p>
+            Your data is kept for as long as your account exists. Delete your
+            account and all of it — transactions, stored emails, categories,
+            budgets — is removed immediately and permanently. There is no
+            archive and no backup copy to restore from.
+          </p>
+        </Section>
+
+        <Section title="Deleting your account">
+          <p>
+            <Link href="/settings/delete-account" className="underline">
+              Settings → Delete account
+            </Link>
+            , reachable from inside the app as well. It removes everything, signs
+            out every device, and revokes paisa.&rsquo;s Gmail access with Google
+            first. Your actual Gmail is untouched — only paisa.&rsquo;s copy of
+            what it read is destroyed.
+          </p>
+        </Section>
+
+        <Section title="How it is protected">
+          <p>
+            Traffic is encrypted in transit. Google credentials are encrypted at
+            rest with AES-256-GCM. Every query is scoped to the signed-in
+            account, so one user&rsquo;s data cannot be reached from
+            another&rsquo;s session. Sign-in supports passkeys, and the app can
+            be locked behind Face ID or your device passcode.
+          </p>
+          <p className="mt-3">
+            No system is perfect. If something is exposed, affected users will be
+            told without delay.
+          </p>
+        </Section>
+
+        <Section title="Your rights">
+          <p>
+            You can see everything paisa. holds about you inside the app, correct
+            any transaction, disconnect Gmail, or delete the account outright.
+            Under India&rsquo;s Digital Personal Data Protection Act you may also
+            ask what is held and request its erasure — the delete-account page
+            does both immediately.
+          </p>
+        </Section>
+
+        <Section title="Children">
+          <p>
+            paisa. is not intended for anyone under 13, and accounts are not
+            knowingly created for them.
+          </p>
+        </Section>
+
+        <Section title="Changes">
+          <p>
+            If this policy changes in a way that affects how your data is used,
+            you will be told in the app before it takes effect.
+          </p>
+        </Section>
+
+        <Section title="Contact">
+          <p>
+            Questions, or a privacy request:{" "}
+            <a className="underline" href="mailto:sania.kothari@gmail.com">
+              sania.kothari@gmail.com
+            </a>
+            .
+          </p>
+        </Section>
+      </div>
+    </main>
+  );
+}
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <h2 className="mb-2 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function Item({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <p className="mt-3">
+      <strong className="text-zinc-900 dark:text-zinc-50">{label}.</strong>{" "}
+      {children}
+    </p>
+  );
+}
