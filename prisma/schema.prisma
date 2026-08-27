@@ -16,6 +16,11 @@ model User {
   name      String?
   image     String? // Google profile picture URL
   googleSub String?  @unique // Google's stable subject id (the real identity key)
+  // Apple's stable subject id. Kept separate from googleSub because the same
+  // person can hold both, and because Apple's private-relay addresses mean
+  // email cannot be used to recognise them — a user signing in with Apple may
+  // present an @privaterelay.appleid.com address that matches nothing.
+  appleSub  String?  @unique
   // Random label in this user's private forwarding address
   // (<inboundKey>@in.<domain>). Bank alerts forwarded there are ingested as if
   // we had read them from the mailbox — which is how the app avoids holding
