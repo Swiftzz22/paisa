@@ -114,6 +114,42 @@ html {
   }
 }
 
+@layer base {
+  /* Touch behaviour, applied once rather than remembered per element.
+
+     touch-action: manipulation drops the browser's wait-and-see for a possible
+     double-tap-to-zoom, which is what made every tap feel like it lagged
+     — the work was already fast, the browser was just holding the event.
+
+     The grey flash iOS paints over a tapped link is replaced by our own
+     :active styling, which reads as intentional rather than as a glitch. */
+  a,
+  button,
+  label,
+  summary,
+  [role="button"] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Anything clickable should say so under a finger as well as a cursor. */
+  a:active,
+  button:active:not(:disabled),
+  [role="button"]:active {
+    opacity: 0.7;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
 @layer components {
   /* 16px font on mobile so iOS Safari doesn't auto-zoom on focus; shrinks to
      14px on sm+ where the zoom isn't a thing. */

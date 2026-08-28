@@ -63,6 +63,29 @@ export default async function LoginPage({
           <PasskeyLoginButton />
         </div>
 
+        {/* Second way in, for anyone who doesn't want to hand over inbox
+            access. The file itself can only be taken once there's an account to
+            attach it to, so this still signs in first — but it says up front
+            that importing is possible, and lands them straight on the importer
+            afterwards instead of on a dashboard with nothing in it. */}
+        {configured ? (
+          <div className="mt-6 rounded-xl border border-zinc-200 bg-white/60 p-4 dark:border-zinc-800 dark:bg-zinc-950/60">
+            <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+              Have a bank statement instead?
+            </p>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              Upload a CSV, Excel, or PDF from any bank and paisa. reads every
+              transaction out of it. No inbox access needed.
+            </p>
+            <a
+              href="/api/auth/login?next=%2Fsettings%2Fimport"
+              className="mt-3 flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 py-3 text-sm font-medium text-zinc-900 transition-colors hover:bg-zinc-50 active:scale-[0.99] dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:hover:bg-zinc-800"
+            >
+              Sign in &amp; upload a statement
+            </a>
+          </div>
+        ) : null}
+
         <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-500">
           We only read your name and email to identify your account. Connecting
           Gmail for transaction import is a separate, optional step inside the

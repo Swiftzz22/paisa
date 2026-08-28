@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/user";
 import { exchangeLoginCode } from "@/lib/auth/google-login";
 import { resolveUserForLogin } from "@/lib/auth/users";
 import { createSession } from "@/lib/auth/session";
+import { safeNext } from "@/lib/auth/next-path";
 import {
   createMobileAuthCode,
   isAllowedReturnUrl,
@@ -122,8 +123,17 @@ export async function GET(req: Request) {
       const identity = await exchangeLoginCode(code);
       const { id: userId, isNew } = await resolveUserForLogin(identity);
       await createSession(userId);
-      // First-time users land on a short onboarding screen; returning users
-      // go straight to their dashboard.
+
+      // An explicit destination wins: someone who pressed "Import a statement"
+      // on the login screen means to import, and dropping them on the
+      // dashboard instead makes them hunt for the thing they just asked for.
+      const wanted = cookieStore.get("login_next")?.value;
+      cookieStore.delete("login_next");
+      const next = safeNext(wanted ?? null);
+      if (next) return NextResponse.redirect(new URL(next, url.origin));
+
+      // Otherwise first-time users land on a short onboarding screen and
+      // returning users go straight to their dashboard.
       return NextResponse.redirect(new URL(isNew ? "/welcome" : "/", url.origin));
     } catch (e) {
       console.error("[login callback] failed:", e);

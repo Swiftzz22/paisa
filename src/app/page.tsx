@@ -4,13 +4,24 @@ import { prisma } from "@/lib/prisma";
 import { formatINR } from "@/lib/format";
 import { paymentModeLabel } from "@/lib/categories";
 import { parseRangeFromParams, toDateInput } from "@/lib/range";
-import { getRangeSummary, type TxRow, type CategorySlice } from "@/lib/spending";
+import {
+  getRangeSummary,
+  type TxRow,
+  type CategorySlice,
+  type MonthlyBar,
+} from "@/lib/spending";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { recategorizeMiscAction } from "@/lib/actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { SegmentedRange } from "@/components/SegmentedRange";
 import { getBudgetProgress, getMonthOverMonthDelta } from "@/lib/budgets";
-import { clockTime, dayRange, weekRange } from "@/lib/time";
+import {
+  clockTime,
+  dayRange,
+  daysInLocalMonth,
+  localParts,
+  weekRange,
+} from "@/lib/time";
 import { getTzOffset } from "@/lib/tz-server";
 
 export const dynamic = "force-dynamic";
@@ -141,14 +152,50 @@ export default async function Home({
   }
   const listTruncated = summary.count > shownCount;
 
+  // Which month bar (if any) the current range corresponds to. A range counts
+  // as "one month" only when it starts on the 1st and ends on the last day, so
+  // an arbitrary custom range doesn't light up a bar it doesn't really match.
+  const fromParts = localParts(range.from, tzOffset);
+  const toParts = localParts(range.to, tzOffset);
+  const nowPartsForRange = localParts(now, tzOffset);
+  const sameMonth =
+    fromParts.year === toParts.year && fromParts.month === toParts.month;
+  const isThisMonth =
+    fromParts.year === nowPartsForRange.year &&
+    fromParts.month === nowPartsForRange.month;
+  // Starts on the 1st and runs either to the month's last day, or — for the
+  // month in progress — to today. "This month" means the 1st to today, not the
+  // 1st to the 31st, so requiring the last day left the current month's bar
+  // unhighlighted on the default view.
+  const rangeIsOneMonth =
+    sameMonth &&
+    fromParts.day === 1 &&
+    (toParts.day === daysInLocalMonth(range.from, tzOffset) ||
+      (isThisMonth && toParts.day >= nowPartsForRange.day));
+  const selectedMonthKey = rangeIsOneMonth
+    ? `${fromParts.year}-${String(fromParts.month + 1).padStart(2, "0")}`
+    : null;
+  const monthBars = summary.monthlyBars.map((b) => ({
+    ...b,
+    href: monthHref(params, b.monthKey),
+  }));
+  const nowParts = localParts(now, tzOffset);
+  const isCurrentMonth =
+    rangeIsOneMonth &&
+    fromParts.year === nowParts.year &&
+    fromParts.month === nowParts.month;
+
   return (
     <main className="mx-auto w-full max-w-md px-4 pb-6 pt-[max(1rem,env(safe-area-inset-top))] sm:max-w-lg sm:pt-6">
       <Header name={user.name} image={user.image} />
 
       <Hero
-        monthLabel={budgetSummary.monthLabel}
+        monthLabel={isCurrentMonth ? budgetSummary.monthLabel : range.label}
+        amount={isCurrentMonth ? momDelta.thisMonth : summary.spentUnfiltered}
         momDelta={momDelta}
-        bars={summary.monthlyBars}
+        showDelta={isCurrentMonth}
+        bars={monthBars}
+        selectedMonthKey={selectedMonthKey}
       />
 
       <SegmentedRange
@@ -318,18 +365,32 @@ function Header({ name, image }: { name: string | null; image: string | null }) 
 
 function Hero({
   monthLabel,
+  amount,
   momDelta,
+  showDelta,
   bars,
+  selectedMonthKey,
 }: {
   monthLabel: string;
+  /** Total for whatever range is showing — not necessarily this month. */
+  amount: number;
   momDelta: MomDelta;
-  bars: Array<{ total: number }>;
+  /** "vs last month" only means something while viewing the current month. */
+  showDelta: boolean;
+  /** Each month plus the link that selects it, resolved by the caller. */
+  bars: Array<MonthlyBar & { href: string }>;
+  /** Which bar reads as chosen, or null when the range isn't one month. */
+  selectedMonthKey: string | null;
 }) {
-  const hasDelta = momDelta.deltaPercent !== null && momDelta.lastMonth > 0;
+  const hasDelta =
+    showDelta && momDelta.deltaPercent !== null && momDelta.lastMonth > 0;
   const up = (momDelta.deltaPercent ?? 0) > 0;
   const pct = hasDelta ? Math.abs(Math.round((momDelta.deltaPercent ?? 0) * 100)) : 0;
   const max = Math.max(1, ...bars.map((b) => b.total));
-  const recent = bars.slice(-7);
+  // Six months rather than twelve: on a phone, twelve bars leaves each one
+  // narrower than a fingertip, and a bar you cannot reliably hit is worse than
+  // one that isn't there.
+  const recent = bars.slice(-6);
 
   return (
     <section className="relative isolate overflow-hidden rounded-3xl border border-zinc-200/60 bg-gradient-to-br from-white to-zinc-50 p-5 shadow-sm dark:border-zinc-800/70 dark:from-zinc-900 dark:to-zinc-950">
@@ -340,7 +401,7 @@ function Hero({
         </div>
         <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
           <span className="text-4xl font-bold tabular-nums tracking-tight text-zinc-900 dark:text-zinc-50">
-            ₹<AnimatedNumber value={Math.round(momDelta.thisMonth)} />
+            ₹<AnimatedNumber value={Math.round(amount)} />
           </span>
           {hasDelta ? (
             <span
@@ -357,20 +418,47 @@ function Hero({
           ) : null}
         </div>
 
-        <div className="mt-4 flex h-10 items-end gap-1.5" aria-hidden>
-          {recent.map((b, i) => (
-            <div
-              key={i}
-              className={
-                "flex-1 rounded-t-md " +
-                (i === recent.length - 1
-                  ? "bg-zinc-900 dark:bg-zinc-100"
-                  : "bg-zinc-200 dark:bg-zinc-700")
-              }
-              style={{ height: `${Math.max(8, (b.total / max) * 100)}%` }}
-            />
-          ))}
-        </div>
+        {/* Tapping a month narrows the whole page to it — the totals, the pie,
+            "Where it went" and the list all follow. Links rather than buttons
+            so the choice is in the URL and survives a reload or a share.
+
+            Deliberately plain utility classes: a fancier set (group-hover,
+            slash-opacity backgrounds) coincided with the dashboard hanging on
+            its loading state during testing, and month selection is not worth
+            risking the page for a hover tint. */}
+        <nav className="mt-4 flex items-end gap-1.5" aria-label="Spending by month">
+          {recent.map((b) => {
+            const on = b.monthKey === selectedMonthKey;
+            return (
+              <Link
+                key={b.monthKey}
+                href={b.href}
+                prefetch={false}
+                aria-current={on ? "true" : undefined}
+                title={`${b.label}: ${formatINR(b.total)}`}
+                className="flex min-h-[44px] flex-1 flex-col justify-end gap-1 rounded-lg p-1"
+              >
+                <span
+                  className={
+                    on
+                      ? "block w-full rounded-t-md bg-zinc-900 dark:bg-zinc-100"
+                      : "block w-full rounded-t-md bg-zinc-200 dark:bg-zinc-700"
+                  }
+                  style={{ height: `${Math.max(6, (b.total / max) * 40)}px` }}
+                />
+                <span
+                  className={
+                    on
+                      ? "block text-center text-[10px] font-semibold leading-none text-zinc-900 dark:text-zinc-100"
+                      : "block text-center text-[10px] leading-none text-zinc-400 dark:text-zinc-500"
+                  }
+                >
+                  {b.label}
+                </span>
+              </Link>
+            );
+          })}
+        </nav>
       </div>
     </section>
   );
@@ -608,6 +696,29 @@ function FilterChips({
       ))}
     </div>
   );
+}
+
+/**
+ * Link to a whole calendar month, keeping any active filters.
+ *
+ * Expressed as from/to rather than a preset because the presets only cover
+ * today/week/month/year — there is no "March" preset — and parseRangeFromParams
+ * already treats an explicit from/to as a custom range.
+ */
+function monthHref(
+  params: Record<string, string | undefined>,
+  monthKey: string
+): string {
+  const [year, month] = monthKey.split("-").map(Number);
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const next = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    // `range` would otherwise win over from/to on the next render.
+    if (v && k !== "range" && k !== "from" && k !== "to") next.set(k, v);
+  }
+  next.set("from", `${monthKey}-01`);
+  next.set("to", `${monthKey}-${String(last).padStart(2, "0")}`);
+  return `/?${next.toString()}`;
 }
 
 function buildHref(

@@ -99,20 +99,27 @@ export async function getRangeSummary(params: {
   /** Minutes ahead of UTC, for bucketing the monthly bars. */
   tzOffset?: number;
 }): Promise<RangeSummary> {
-  const txs = await prisma.transaction.findMany({
-    where: {
-      userId: params.userId,
-      occurredAt: { gte: params.from, lte: params.to },
-    },
-    orderBy: { occurredAt: "desc" },
-    include: {
-      lines: {
-        include: {
-          category: { include: { parent: true } },
+  // The month bars depend only on the user and their timezone — never on the
+  // range or the filters — so there is nothing to wait for. Issuing both at
+  // once removes a whole database round-trip from every single page load,
+  // which against a remote Turso is most of what "slow" meant here.
+  const [txs, monthlyBars] = await Promise.all([
+    prisma.transaction.findMany({
+      where: {
+        userId: params.userId,
+        occurredAt: { gte: params.from, lte: params.to },
+      },
+      orderBy: { occurredAt: "desc" },
+      include: {
+        lines: {
+          include: {
+            category: { include: { parent: true } },
+          },
         },
       },
-    },
-  });
+    }),
+    getMonthlyBars(params.userId, params.tzOffset ?? 0),
+  ]);
 
   const allRows: TxRow[] = txs.map((t) => {
     const firstLine = t.lines[0];
@@ -179,8 +186,6 @@ export async function getRangeSummary(params: {
   const LIST_CAP = 500;
   const listRows = filteredRows.slice(0, LIST_CAP);
   const byDay = groupByDay(listRows);
-
-  const monthlyBars = await getMonthlyBars(params.userId, params.tzOffset ?? 0);
 
   return {
     spent,
