@@ -20,11 +20,11 @@ export default async function DeleteAccountPage({
   const params = await searchParams;
   const user = await getCurrentUser();
 
-  const [transactions, emails, categories, emailAccount] = await Promise.all([
+  const [transactions, emails, categories, emailAccounts] = await Promise.all([
     prisma.transaction.count({ where: { userId: user.id } }),
     prisma.receivedEmail.count({ where: { userId: user.id } }),
     prisma.category.count({ where: { userId: user.id } }),
-    prisma.emailAccount.findUnique({
+    prisma.emailAccount.findMany({
       where: { userId: user.id },
       select: { accountEmail: true },
     }),
@@ -69,11 +69,11 @@ export default async function DeleteAccountPage({
             stored bank emails, including their original contents
           </li>
           <li>Your sign-in details, passkeys, and every signed-in device</li>
-          {emailAccount ? (
+          {emailAccounts.length > 0 ? (
             <li>
               paisa.&rsquo;s access to{" "}
               <strong className="text-zinc-900 dark:text-zinc-50">
-                {emailAccount.accountEmail}
+                {emailAccounts.map((a) => a.accountEmail).join(", ")}
               </strong>{" "}
               is revoked with Google first, so nothing is left connected
             </li>

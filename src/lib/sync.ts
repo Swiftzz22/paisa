@@ -1,7 +1,10 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { fetchRecent } from "@/lib/email/gmail";
-import { getRefreshToken, markSynced } from "@/lib/email/account";
+import {
+  getAccountsWithTokens,
+  markSyncedAccount,
+} from "@/lib/email/account";
 import { processPendingForUser } from "@/lib/email/process";
 import { isGeminiConfigured } from "@/lib/email/parser";
 
@@ -136,42 +139,54 @@ export async function runSyncForUser(
   const outOfTime = () => timeLeft() <= 0;
 
   try {
-    const refreshToken = await getRefreshToken(userId);
-    if (!refreshToken) {
-      // No Gmail connected for this user — nothing to fetch.
+    const accounts = await getAccountsWithTokens(userId);
+    if (accounts.length === 0) {
+      // No mailbox connected for this user — nothing to fetch.
       return status;
     }
+    status.account = accounts.map((a) => a.accountEmail).join(", ");
 
-    const account = await prisma.emailAccount.findUnique({
-      where: { userId },
-      select: { accountEmail: true },
-    });
-    status.account = account?.accountEmail ?? null;
+    // Every connected mailbox gets a pass. Someone whose bank writes to a work
+    // address and whose cards write to a personal one needs both read, and
+    // stopping at the first would lose half their spending silently.
+    for (const account of accounts) {
+      if (outOfTime()) {
+        status.stoppedEarly = true;
+        break;
+      }
 
-    // 1. Backfill: walk backwards from the oldest stored email toward Jan 1.
-    const oldest = await prisma.receivedEmail.findFirst({
-      where: { userId },
-      orderBy: { receivedAt: "asc" },
-      select: { receivedAt: true },
-    });
-    const cursor = oldest?.receivedAt ?? new Date();
-    if (cursor.getTime() > BACKFILL_START.getTime() && !outOfTime()) {
-      const messages = await fetchRecent(refreshToken, {
-        limit: BACKFILL_CHUNK_SIZE,
-        after: BACKFILL_START,
-        before: new Date(cursor),
-        deadline,
+      // 1. Backfill: walk backwards from the oldest stored email toward Jan 1.
+      //    The cursor is per-user rather than per-mailbox: the aim is to reach
+      //    BACKFILL_START overall, and a second mailbox added later simply
+      //    contributes whatever it has in the windows still being walked.
+      const oldest = await prisma.receivedEmail.findFirst({
+        where: { userId },
+        orderBy: { receivedAt: "asc" },
+        select: { receivedAt: true },
       });
-      const inserted = await insertNewEmails(userId, messages);
-      status.fetched += inserted;
-      status.backfillStillRunning = inserted > 0;
-      await markSynced(userId);
-    }
+      const cursor = oldest?.receivedAt ?? new Date();
+      if (cursor.getTime() > BACKFILL_START.getTime() && !outOfTime()) {
+        const messages = await fetchRecent(account.refreshToken, {
+          limit: BACKFILL_CHUNK_SIZE,
+          after: BACKFILL_START,
+          before: new Date(cursor),
+          deadline,
+        });
+        const inserted = await insertNewEmails(userId, messages);
+        status.fetched += inserted;
+        if (inserted > 0) status.backfillStillRunning = true;
+      }
 
-    // 2. Going-forward: pull the most recent financial-sender emails.
-    if (!outOfTime()) {
-      const recent = await fetchRecent(refreshToken, { limit: 30, deadline });
-      status.fetched += await insertNewEmails(userId, recent);
+      // 2. Going-forward: pull the most recent financial-sender emails.
+      if (!outOfTime()) {
+        const recent = await fetchRecent(account.refreshToken, {
+          limit: 30,
+          deadline,
+        });
+        status.fetched += await insertNewEmails(userId, recent);
+      }
+
+      await markSyncedAccount(account.id);
     }
 
     // 3. Process one batch of pending emails into transactions. Needs room for

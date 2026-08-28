@@ -41,7 +41,7 @@ model User {
   importBatches       ImportBatch[]
   receivedEmails      ReceivedEmail[]
   categorizationRules CategorizationRule[]
-  emailAccount        EmailAccount?
+  emailAccounts       EmailAccount[]
   paymentModes        PaymentMode[]
   budgets             Budget[]
   sessions            Session[]
@@ -49,9 +49,6 @@ model User {
   mobileAuthCodes     MobileAuthCode[]
 }
 
-/// A WebAuthn passkey (biometric / device credential) bound to a user. The
-/// private key never leaves the user's device; we store only the public key,
-/// the credential id, and a signature counter for replay detection.
 /// Short-lived one-time code handed to the app after a browser sign-in.
 ///
 /// The bearer token is never put in the redirect URL: deep-link URLs end up in
@@ -83,6 +80,9 @@ model AppleNonce {
   @@index([expiresAt])
 }
 
+/// A WebAuthn passkey (biometric / device credential) bound to a user. The
+/// private key never leaves the user's device; we store only the public key,
+/// the credential id, and a signature counter for replay detection.
 model Passkey {
   id           String   @id @default(uuid())
   userId       String
@@ -148,11 +148,13 @@ model PaymentMode {
   @@unique([userId, value])
 }
 
-/// OAuth-connected email account (Gmail for v1). One per user.
 /// Tokens are AES-256-GCM encrypted at rest; ciphertext stored base64.
+/// A connected mailbox. One user may connect several — bank alerts are often
+/// split across a personal Gmail and a work or Outlook address, and forcing a
+/// choice between them silently loses half someone's spending.
 model EmailAccount {
   id              String    @id @default(uuid())
-  userId          String    @unique
+  userId          String
   provider        String    @default("gmail")
   accountEmail    String // the connected Gmail address, for display
   refreshTokenEnc String // ciphertext of OAuth refresh token
@@ -164,6 +166,11 @@ model EmailAccount {
   createdAt       DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The same address cannot be connected twice by one person, but different
+  // addresses — and different providers — can.
+  @@unique([userId, accountEmail])
+  @@index([userId])
 }
 
 model Transaction {
