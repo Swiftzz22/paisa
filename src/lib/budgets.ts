@@ -80,14 +80,23 @@ export async function getBudgetProgress(
   }
 
   // Pull all this-month debits with their categories so we can roll up.
+  // Selected down to the four fields the roll-up below actually reads: the
+  // previous include dragged back every column of each category and its
+  // parent, per line, per transaction, to use an id and a parentId.
   const txs = await prisma.transaction.findMany({
     where: {
       userId,
       type: "debit",
       occurredAt: { gte: monthStart, lte: monthEnd },
     },
-    include: {
-      lines: { include: { category: { include: { parent: true } } } },
+    select: {
+      amount: true,
+      lines: {
+        select: {
+          amount: true,
+          category: { select: { id: true, parentId: true } },
+        },
+      },
     },
   });
 
@@ -158,27 +167,30 @@ export async function getMonthOverMonthDelta(
   const thisMonthRange = monthRange(when, tzOffset);
   const lastMonthRange = monthRange(when, tzOffset, -1);
 
-  const [thisTxs, lastTxs] = await Promise.all([
-    prisma.transaction.findMany({
+  // Summed in the database rather than by pulling every row back and adding
+  // them up here: this only ever needed two numbers, and a heavy month meant
+  // hundreds of rows crossing the wire to produce one of them.
+  const [thisAgg, lastAgg] = await Promise.all([
+    prisma.transaction.aggregate({
       where: {
         userId,
         type: "debit",
         occurredAt: { gte: thisMonthRange.from, lte: thisMonthRange.to },
       },
-      select: { amount: true },
+      _sum: { amount: true },
     }),
-    prisma.transaction.findMany({
+    prisma.transaction.aggregate({
       where: {
         userId,
         type: "debit",
         occurredAt: { gte: lastMonthRange.from, lte: lastMonthRange.to },
       },
-      select: { amount: true },
+      _sum: { amount: true },
     }),
   ]);
 
-  const thisMonth = thisTxs.reduce((s, t) => s + Number(t.amount), 0);
-  const lastMonth = lastTxs.reduce((s, t) => s + Number(t.amount), 0);
+  const thisMonth = Number(thisAgg._sum.amount ?? 0);
+  const lastMonth = Number(lastAgg._sum.amount ?? 0);
   const deltaAbs = thisMonth - lastMonth;
   const deltaPercent = lastMonth > 0 ? deltaAbs / lastMonth : null;
 
