@@ -87,7 +87,23 @@ export async function getAccountsWithTokens(
     where: { userId },
     orderBy: { createdAt: "asc" },
   });
-  return rows.map((r) => ({ ...toStored(r), refreshToken: decrypt(r.refreshTokenEnc) }));
+
+  // A row can fail to decrypt if it was written under a previous
+  // ENCRYPTION_KEY. Now that a user can hold several mailboxes, letting that
+  // throw would take down the sync for all of them — so drop the unreadable
+  // one and carry on with the rest. The user sees that mailbox stop updating
+  // and can reconnect it; the others keep working.
+  const out: Array<StoredAccount & { refreshToken: string }> = [];
+  for (const r of rows) {
+    try {
+      out.push({ ...toStored(r), refreshToken: decrypt(r.refreshTokenEnc) });
+    } catch {
+      console.error(
+        `[email] cannot decrypt token for ${r.accountEmail} (account ${r.id}) — skipping; it needs reconnecting`
+      );
+    }
+  }
+  return out;
 }
 
 /**

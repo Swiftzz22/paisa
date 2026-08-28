@@ -233,13 +233,13 @@ export async function uploadStatementAction(form: FormData) {
   const user = await getCurrentUser();
   const file = form.get("statement");
   if (!file || typeof file === "string") {
-    redirect("/settings/email?status=err&error=No+file+selected.");
+    redirect("/settings/import?status=err&error=No+file+selected.");
   }
 
   // Reject oversized uploads before reading them into memory.
   if ((file as File).size > MAX_UPLOAD_BYTES) {
     redirect(
-      "/settings/email?status=err&error=" +
+      "/settings/import?status=err&error=" +
         encodeURIComponent("File too large — max 10 MB.")
     );
   }
@@ -257,7 +257,7 @@ export async function uploadStatementAction(form: FormData) {
     });
 
     revalidatePath("/");
-    revalidatePath("/settings/email");
+    revalidatePath("/settings/import");
 
     const params = new URLSearchParams({
       status: "imported",
@@ -273,7 +273,7 @@ export async function uploadStatementAction(form: FormData) {
     if (result.warnings && result.warnings.length > 0) {
       params.set("warn", result.warnings[0]);
     }
-    redirect(`/settings/email?${params.toString()}`);
+    redirect(`/settings/import?${params.toString()}`);
   } catch (e) {
     if (e instanceof Error && /NEXT_REDIRECT/.test(e.message)) throw e;
     if (e instanceof GeminiRateLimitError) {
@@ -281,14 +281,14 @@ export async function uploadStatementAction(form: FormData) {
         status: "err",
         error: `Gemini rate-limited (free tier). Wait ${e.retryAfterSeconds}s and try the upload again — no work was lost.`,
       });
-      redirect(`/settings/email?${params.toString()}`);
+      redirect(`/settings/import?${params.toString()}`);
     }
     console.error("[uploadStatementAction] failed:", e);
     const params = new URLSearchParams({
       status: "err",
       error: (e instanceof Error ? e.message : String(e)).slice(0, 400),
     });
-    redirect(`/settings/email?${params.toString()}`);
+    redirect(`/settings/import?${params.toString()}`);
   }
 }
 

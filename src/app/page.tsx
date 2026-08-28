@@ -646,7 +646,21 @@ function EmptyState() {
   return (
     <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-8 text-center dark:border-zinc-700 dark:bg-zinc-900/40">
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        No transactions in this range. Connect Gmail or add one with the + button.
+        No transactions in this range.
+      </p>
+      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-500">
+        Get started in whichever way suits you:
+      </p>
+      <div className="mt-4 flex flex-wrap justify-center gap-2">
+        <Link href="/settings/email" className="btn-primary">
+          Connect an inbox
+        </Link>
+        <Link href="/settings/import" className="btn-secondary">
+          Upload a statement
+        </Link>
+      </div>
+      <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-500">
+        Or add a transaction by hand with the + button.
       </p>
     </div>
   );

@@ -28,10 +28,16 @@ const TILES: Array<{
       "Set soft monthly caps per category (food, transport, subs…). The home page shows progress bars and warns at 80%.",
   },
   {
+    href: "/settings/import",
+    title: "Import a statement",
+    description:
+      "Upload a CSV, Excel, or PDF statement from any bank. No email access needed.",
+  },
+  {
     href: "/settings/email",
     title: "Email connection",
     description:
-      "Connect Gmail, run background sync, upload bank statements (HDFC .xls, HSBC .pdf).",
+      "Connect one or more inboxes so bank, UPI, and card alerts are read automatically.",
   },
   {
     href: "/settings/passkeys",
