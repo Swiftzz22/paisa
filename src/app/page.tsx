@@ -229,6 +229,13 @@ export default async function Home({
         toInput={toDateInput(range.to, tzOffset)}
       />
 
+      <FlowRow
+        label={range.label}
+        spent={summary.spent}
+        received={summary.received}
+        net={summary.total}
+      />
+
       <section className="mt-3 grid grid-cols-2 gap-3">
         <MiniTile
           label="Spent this week"
@@ -534,6 +541,75 @@ function MonthPager({
     >
       {older ? "\u2039" : "\u203a"}
     </Link>
+  );
+}
+
+/**
+ * What went out, what came in, and the difference, for whichever range is
+ * selected. The hero only ever showed spending, so money arriving — a refund,
+ * a reversal, someone settling up — was invisible unless you scrolled the list
+ * and noticed a green row.
+ *
+ * These three follow the active filters, so they always describe the same set
+ * of transactions as the list below them.
+ */
+function FlowRow({
+  label,
+  spent,
+  received,
+  net,
+}: {
+  label: string;
+  spent: number;
+  received: number;
+  /** spent − received. Negative means more came in than went out. */
+  net: number;
+}) {
+  // Reading "net −₹2,000" as a loss and "net +₹2,000" as a gain is the way
+  // round people expect, so the sign is flipped from the stored value.
+  const inProfit = net < 0;
+  const netText = `${inProfit ? "+" : "−"} ${formatINR(Math.abs(net))}`;
+  return (
+    <section
+      className="mt-3 flex items-stretch rounded-2xl border border-zinc-200/80 bg-white py-3 dark:border-zinc-800 dark:bg-zinc-900/40"
+      aria-label={`Spent, received and net for ${label}`}
+    >
+      <FlowCell label="Spent" value={`− ${formatINR(spent)}`} />
+      <span className="w-px self-stretch bg-zinc-200 dark:bg-zinc-800" aria-hidden />
+      <FlowCell
+        label="Received"
+        value={`+ ${formatINR(received)}`}
+        tone={received > 0 ? "in" : undefined}
+      />
+      <span className="w-px self-stretch bg-zinc-200 dark:bg-zinc-800" aria-hidden />
+      <FlowCell label="Net" value={netText} tone={inProfit ? "in" : undefined} />
+    </section>
+  );
+}
+
+function FlowCell({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "in";
+}) {
+  return (
+    <div className="flex-1 px-2 text-center">
+      <div className="text-[11px] text-zinc-500 dark:text-zinc-400">{label}</div>
+      <div
+        className={
+          "mt-0.5 text-sm font-semibold tabular-nums " +
+          (tone === "in"
+            ? "text-emerald-600 dark:text-emerald-400"
+            : "text-zinc-900 dark:text-zinc-50")
+        }
+      >
+        {value}
+      </div>
+    </div>
   );
 }
 
