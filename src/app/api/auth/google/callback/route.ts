@@ -65,6 +65,49 @@ export async function GET(req: Request) {
     }
   }
 
+  // -------- IN-APP GMAIL CONNECT flow --------
+  // Same consent as the website's connect below, but started from the app, so
+  // the user comes from a ticket rather than a session cookie and the result
+  // returns to the app's deep link.
+  const connectState = cookieStore.get("mobile_connect_state")?.value;
+  if (connectState) {
+    cookieStore.delete("mobile_connect_state");
+    const connectUserId = cookieStore.get("mobile_connect_user")?.value ?? "";
+    cookieStore.delete("mobile_connect_user");
+    const returnUrl = cookieStore.get("mobile_connect_return")?.value ?? "";
+    cookieStore.delete("mobile_connect_return");
+
+    if (!isAllowedReturnUrl(returnUrl)) {
+      return NextResponse.json(
+        { error: "Unrecognised return URL." },
+        { status: 400 }
+      );
+    }
+    const back = (params: Record<string, string>) =>
+      NextResponse.redirect(`${returnUrl}?${new URLSearchParams(params)}`);
+
+    if (error) return back({ error: `Google declined: ${error}` });
+    if (!code || !state) return back({ error: "Missing code or state." });
+    if (connectState !== state) return back({ error: "State mismatch." });
+    if (!connectUserId) return back({ error: "Session expired. Try again." });
+
+    try {
+      const tokens = await exchangeCode(code);
+      await saveEmailAccount({
+        userId: connectUserId,
+        email: tokens.email,
+        refreshToken: tokens.refreshToken,
+        accessToken: tokens.accessToken,
+        expiresAt: tokens.expiresAt,
+        scope: tokens.scope,
+      });
+      return back({ connected: "1" });
+    } catch (e) {
+      console.error("[mobile gmail connect] failed:", e);
+      return back({ error: "Couldn't connect that account." });
+    }
+  }
+
   // -------- LOGIN flow --------
   if (loginState) {
     cookieStore.delete("login_state");

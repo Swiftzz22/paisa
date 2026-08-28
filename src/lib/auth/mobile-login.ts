@@ -40,25 +40,66 @@ export function isAllowedReturnUrl(returnUrl: string): boolean {
   return false;
 }
 
+/**
+ * Codes are namespaced so one purpose's code cannot be spent on another — a
+ * sign-in code must never be usable as a Gmail-connect ticket, or vice versa.
+ */
+const PREFIX = { signin: "si_", connect: "gc_" } as const;
+type Purpose = keyof typeof PREFIX;
+
 /** Mint a single-use code the app can trade for a bearer token. */
 export async function createMobileAuthCode(userId: string): Promise<string> {
-  const code = randomBytes(32).toString("hex");
+  return mintCode(userId, "signin");
+}
+
+/**
+ * Ticket proving which signed-in user is about to connect Gmail.
+ *
+ * The connect flow runs in a browser, which carries no bearer token, and
+ * putting the token in the URL would leak it into logs. So the app trades its
+ * token for this short-lived ticket over HTTPS and passes only the ticket.
+ */
+export async function createGmailConnectTicket(userId: string): Promise<string> {
+  return mintCode(userId, "connect");
+}
+
+async function mintCode(userId: string, purpose: Purpose): Promise<string> {
+  const code = PREFIX[purpose] + randomBytes(32).toString("hex");
   await prisma.mobileAuthCode.create({
     data: { code, userId, expiresAt: new Date(Date.now() + CODE_TTL_MS) },
   });
   return code;
 }
 
-/**
- * Redeem a code, returning the user it belongs to. The row is deleted whether
- * or not it was still valid, so a code can never be used twice.
- */
+/** Redeem a Gmail-connect ticket. Single use, like every code here. */
+export async function redeemGmailConnectTicket(
+  ticket: string
+): Promise<{ userId: string } | null> {
+  return redeem(ticket, "connect");
+}
+
+/** Redeem a sign-in code for the bearer-token exchange. */
 export async function redeemMobileAuthCode(
   code: string
+): Promise<{ userId: string } | null> {
+  return redeem(code, "signin");
+}
+
+/**
+ * Look up a code, delete it whether or not it was usable, and return its user.
+ *
+ * Deleting unconditionally is what makes a code single-use: a failed attempt
+ * must not leave it spendable. The purpose check is what stops a ticket minted
+ * for one flow being presented to another.
+ */
+async function redeem(
+  code: string,
+  purpose: Purpose
 ): Promise<{ userId: string } | null> {
   const row = await prisma.mobileAuthCode.findUnique({ where: { code } });
   await prisma.mobileAuthCode.deleteMany({ where: { code } });
   if (!row) return null;
+  if (!code.startsWith(PREFIX[purpose])) return null;
   if (row.expiresAt.getTime() < Date.now()) return null;
   return { userId: row.userId };
 }
