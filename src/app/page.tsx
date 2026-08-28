@@ -26,6 +26,9 @@ import { getTzOffset } from "@/lib/tz-server";
 
 export const dynamic = "force-dynamic";
 
+/** Month bars visible at once in the hero; the rest are an arrow away. */
+const HERO_MONTHS = 6;
+
 type MomDelta = {
   thisMonth: number;
   lastMonth: number;
@@ -49,6 +52,8 @@ type SearchParams = Promise<{
   ruleApplied?: string;
   merchant?: string;
   q?: string;
+  /** Which six-month window the hero's month bars show; 0 = the most recent. */
+  mo?: string;
 }>;
 
 // ── Category → icon + color, so transactions read at a glance (Quicken-style) ──
@@ -179,6 +184,23 @@ export default async function Home({
     ...b,
     href: monthHref(params, b.monthKey),
   }));
+  // The bars are the only month picker on this page, so showing just the last
+  // six also decided how far back anyone could look — January and February
+  // were unreachable. The window now pages, and lives in the URL so it
+  // survives a reload or a share (monthHref copies it through).
+  const maxMonthOffset = Math.max(0, monthBars.length - HERO_MONTHS);
+  const monthOffset = Math.min(
+    Math.max(0, Math.trunc(Number(params.mo)) || 0),
+    maxMonthOffset
+  );
+  const olderMonthsHref =
+    monthOffset < maxMonthOffset
+      ? buildHref(params, "mo", String(monthOffset + 1))
+      : null;
+  const newerMonthsHref =
+    monthOffset > 0
+      ? buildHref(params, "mo", monthOffset > 1 ? String(monthOffset - 1) : null)
+      : null;
   const nowParts = localParts(now, tzOffset);
   const isCurrentMonth =
     rangeIsOneMonth &&
@@ -196,6 +218,9 @@ export default async function Home({
         showDelta={isCurrentMonth}
         bars={monthBars}
         selectedMonthKey={selectedMonthKey}
+        monthOffset={monthOffset}
+        olderMonthsHref={olderMonthsHref}
+        newerMonthsHref={newerMonthsHref}
       />
 
       <SegmentedRange
@@ -370,6 +395,9 @@ function Hero({
   showDelta,
   bars,
   selectedMonthKey,
+  monthOffset,
+  olderMonthsHref,
+  newerMonthsHref,
 }: {
   monthLabel: string;
   /** Total for whatever range is showing — not necessarily this month. */
@@ -381,16 +409,25 @@ function Hero({
   bars: Array<MonthlyBar & { href: string }>;
   /** Which bar reads as chosen, or null when the range isn't one month. */
   selectedMonthKey: string | null;
+  /** How many months back the visible window is paged; 0 = the newest six. */
+  monthOffset: number;
+  /** Steps the window one month further back, or null at the oldest bar. */
+  olderMonthsHref: string | null;
+  /** Steps it back toward the present, or null when already there. */
+  newerMonthsHref: string | null;
 }) {
   const hasDelta =
     showDelta && momDelta.deltaPercent !== null && momDelta.lastMonth > 0;
   const up = (momDelta.deltaPercent ?? 0) > 0;
   const pct = hasDelta ? Math.abs(Math.round((momDelta.deltaPercent ?? 0) * 100)) : 0;
+  // Scaled across all twelve months, not just the visible six, so a bar's
+  // height means the same thing whichever window you are looking at.
   const max = Math.max(1, ...bars.map((b) => b.total));
-  // Six months rather than twelve: on a phone, twelve bars leaves each one
+  // Six at a time rather than twelve: on a phone, twelve bars leaves each one
   // narrower than a fingertip, and a bar you cannot reliably hit is worse than
-  // one that isn't there.
-  const recent = bars.slice(-6);
+  // one that isn't there. The arrows reach the rest.
+  const windowEnd = bars.length - monthOffset;
+  const recent = bars.slice(Math.max(0, windowEnd - HERO_MONTHS), windowEnd);
 
   return (
     <section className="relative isolate overflow-hidden rounded-3xl border border-zinc-200/60 bg-gradient-to-br from-white to-zinc-50 p-5 shadow-sm dark:border-zinc-800/70 dark:from-zinc-900 dark:to-zinc-950">
@@ -427,6 +464,7 @@ function Hero({
             its loading state during testing, and month selection is not worth
             risking the page for a hover tint. */}
         <nav className="mt-4 flex items-end gap-1.5" aria-label="Spending by month">
+          <MonthPager href={olderMonthsHref} direction="older" />
           {recent.map((b) => {
             const on = b.monthKey === selectedMonthKey;
             return (
@@ -457,9 +495,45 @@ function Hero({
               </Link>
             );
           })}
+          <MonthPager href={newerMonthsHref} direction="newer" />
         </nav>
       </div>
     </section>
+  );
+}
+
+/**
+ * One step of the hero's month window. Rendered as an inert span at either end
+ * rather than hidden, so the bars don't shift sideways when you reach the edge.
+ */
+function MonthPager({
+  href,
+  direction,
+}: {
+  href: string | null;
+  direction: "older" | "newer";
+}) {
+  const older = direction === "older";
+  const label = older ? "Earlier months" : "Later months";
+  // h-11 is 44px — the same tap target the bars themselves get.
+  const base =
+    "flex h-11 w-7 shrink-0 items-center justify-center rounded-lg text-lg leading-none";
+  if (!href) {
+    return (
+      <span aria-hidden className={`${base} text-zinc-300 dark:text-zinc-700`}>
+        {older ? "\u2039" : "\u203a"}
+      </span>
+    );
+  }
+  return (
+    <Link
+      href={href}
+      aria-label={label}
+      title={label}
+      className={`${base} text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800`}
+    >
+      {older ? "\u2039" : "\u203a"}
+    </Link>
   );
 }
 
