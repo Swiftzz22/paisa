@@ -433,7 +433,6 @@ function Hero({
               <Link
                 key={b.monthKey}
                 href={b.href}
-                prefetch={false}
                 aria-current={on ? "true" : undefined}
                 title={`${b.label}: ${formatINR(b.total)}`}
                 className="flex min-h-[44px] flex-1 flex-col justify-end gap-1 rounded-lg p-1"
