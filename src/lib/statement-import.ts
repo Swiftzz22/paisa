@@ -1,5 +1,7 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@/generated/prisma/client";
 import { normalizeMerchantMatcher } from "@/lib/rules";
 import { parseHdfcStatement, type ParsedRow } from "@/lib/statement";
 import {
@@ -9,6 +11,7 @@ import {
 import {
   parseStatementFile,
   type UniversalRow,
+  type UniversalParseResult,
 } from "@/lib/statement-universal";
 import { getCategoryOptions } from "@/lib/categories";
 
@@ -55,6 +58,30 @@ export async function importUniversalStatement(params: {
     categories: categoryOptions.map((c) => ({ label: c.label, id: c.id })),
   });
 
+  return persistUniversalRows({
+    userId: params.userId,
+    filename: params.filename,
+    parsed,
+    labelToId,
+  });
+}
+
+/**
+ * Deduplicate parsed rows against what is already stored and write the
+ * survivors.
+ *
+ * Split out from the parsing above so it can be exercised on its own: this is
+ * where the money lands, and it should be testable without spending an LLM
+ * call to get here.
+ */
+export async function persistUniversalRows(params: {
+  userId: string;
+  filename: string;
+  parsed: UniversalParseResult;
+  labelToId: Map<string, string>;
+}): Promise<ImportResult> {
+  const { parsed, labelToId } = params;
+
   const out: ImportResult = {
     bank: parsed.bank,
     totalRows: parsed.rows.length,
@@ -85,15 +112,75 @@ export async function importUniversalStatement(params: {
     },
   });
 
+  // Duplicate detection used to run two queries per row and then insert with a
+  // third, all in series: a 200-row statement meant 600 sequential round-trips
+  // and an import that ran long enough to be killed before it could report
+  // back. Both lookups are now done once for the whole file and matched in
+  // memory, and the rows go in as batches.
+  const refs = parsed.rows.map(universalRef);
+  const [existingRefs, spanRows] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { userId: params.userId, externalId: { in: refs } },
+      select: { externalId: true },
+    }),
+    (async () => {
+      const times = parsed.rows.map((r) => r.date.getTime());
+      const first = new Date(Math.min(...times));
+      const last = new Date(Math.max(...times));
+      first.setHours(0, 0, 0, 0);
+      last.setHours(23, 59, 59, 999);
+      return prisma.transaction.findMany({
+        where: {
+          userId: params.userId,
+          occurredAt: { gte: first, lte: last },
+        },
+        select: { merchant: true, amount: true, occurredAt: true, type: true },
+      });
+    })(),
+  ]);
+
+  const seenRefs = new Set(
+    existingRefs.map((r) => r.externalId).filter((v): v is string => !!v)
+  );
+
+  // Same-day buckets for the fuzzy check, keyed exactly as the per-row query
+  // was scoped: the row's local calendar day plus its debit/credit type.
+  const dayBuckets = new Map<string, Array<{ merchant: string; amount: number }>>();
+  const bucketKey = (d: Date, type: string) =>
+    `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${type}`;
+  for (const t of spanRows) {
+    const key = bucketKey(t.occurredAt, t.type);
+    const list = dayBuckets.get(key);
+    const entry = { merchant: t.merchant, amount: Number(t.amount) };
+    if (list) list.push(entry);
+    else dayBuckets.set(key, [entry]);
+  }
+
+  // id is optional to Prisma (it has a default) but we always supply one,
+  // so the lines can be matched to their transaction before either is written.
+  const pendingTxs: ImportedTx[] = [];
+  const pendingLines: Prisma.ExpenseLineCreateManyInput[] = [];
+
   for (const row of parsed.rows) {
     try {
       const externalId = universalRef(row);
-      const dup = await findUniversalDuplicate(params.userId, row, externalId);
-      if (dup === "ref") {
+
+      // Covers rows already in the database and repeats within this same file,
+      // which the old code caught only because the first had already been
+      // written by the time the second was checked.
+      if (seenRefs.has(externalId)) {
         out.skippedByRef++;
         continue;
       }
-      if (dup === "fuzzy") {
+
+      const key = bucketKey(row.date, row.type);
+      const sameDay = dayBuckets.get(key) ?? [];
+      const fuzzy = sameDay.some(
+        (t) =>
+          Math.abs(t.amount - row.amount) <= 0.01 &&
+          fuzzyMerchantMatch(t.merchant, row.merchant)
+      );
+      if (fuzzy) {
         out.skippedByFuzzy++;
         continue;
       }
@@ -106,31 +193,108 @@ export async function importUniversalStatement(params: {
           ? llmCatId ?? incomeOtherId
           : pickRuleCategory(rules, row.merchant) ?? llmCatId ?? miscId;
 
-      await prisma.transaction.create({
-        data: {
-          userId: params.userId,
-          merchant: row.merchant,
-          merchantRaw: row.narration || null,
-          amount: row.amount,
-          occurredAt: row.date,
-          paymentMode: row.paymentMode,
-          source: "csv",
-          type: row.type,
-          externalId,
-          importBatchId: batch.id,
-          note: null,
-          lines: { create: [{ categoryId, amount: row.amount }] },
-        },
+      // Id chosen here rather than by the database, so the expense lines can be
+      // batched too instead of needing a row back for each insert.
+      const id = randomUUID();
+      pendingTxs.push({
+        id,
+        userId: params.userId,
+        merchant: row.merchant,
+        merchantRaw: row.narration || null,
+        amount: row.amount,
+        occurredAt: row.date,
+        paymentMode: row.paymentMode,
+        source: "csv",
+        type: row.type,
+        externalId,
+        importBatchId: batch.id,
+        note: null,
       });
-      out.inserted++;
-      if (row.type === "credit") out.credits = (out.credits ?? 0) + 1;
-      else out.debits = (out.debits ?? 0) + 1;
+      pendingLines.push({ transactionId: id, categoryId, amount: row.amount });
+
+      // Accepted rows join the in-memory sets so later rows in this same file
+      // are deduplicated against them, matching the old behaviour.
+      seenRefs.add(externalId);
+      if (dayBuckets.has(key)) {
+        dayBuckets.get(key)!.push({ merchant: row.merchant, amount: row.amount });
+      } else {
+        dayBuckets.set(key, [{ merchant: row.merchant, amount: row.amount }]);
+      }
     } catch (e) {
       console.error("[universal import] row failed:", row, e);
       out.failed++;
     }
   }
+
+  const written = await writeImportedRows(pendingTxs, pendingLines);
+  out.failed += written.failed;
+  for (const tx of written.inserted) {
+    out.inserted++;
+    if (tx.type === "credit") out.credits = (out.credits ?? 0) + 1;
+    else out.debits = (out.debits ?? 0) + 1;
+  }
+
   return out;
+}
+
+/** How many rows to write per statement — small enough to stay well inside
+ * SQLite's variable limit, large enough that a big file is a handful of
+ * round-trips rather than hundreds. */
+const WRITE_CHUNK = 50;
+
+/**
+ * Write prepared rows and their category lines in batches.
+ *
+ * A chunk that fails is retried row by row, so one malformed row is counted as
+ * a single failure instead of silently taking its forty-nine neighbours with
+ * it — the per-row loop this replaced could only ever lose one at a time, and
+ * that property is worth keeping.
+ */
+type ImportedTx = Prisma.TransactionCreateManyInput & { id: string };
+
+async function writeImportedRows(
+  txs: ImportedTx[],
+  lines: Prisma.ExpenseLineCreateManyInput[]
+): Promise<{ inserted: ImportedTx[]; failed: number }> {
+  const linesByTx = new Map<string, Prisma.ExpenseLineCreateManyInput[]>();
+  for (const l of lines) {
+    const list = linesByTx.get(l.transactionId);
+    if (list) list.push(l);
+    else linesByTx.set(l.transactionId, [l]);
+  }
+
+  const inserted: ImportedTx[] = [];
+  let failed = 0;
+
+  for (let i = 0; i < txs.length; i += WRITE_CHUNK) {
+    const chunk = txs.slice(i, i + WRITE_CHUNK);
+    const chunkLines = chunk.flatMap((t) => linesByTx.get(t.id) ?? []);
+    try {
+      await prisma.$transaction([
+        prisma.transaction.createMany({ data: chunk }),
+        prisma.expenseLine.createMany({ data: chunkLines }),
+      ]);
+      inserted.push(...chunk);
+    } catch (e) {
+      console.error("[universal import] chunk failed, retrying rows:", e);
+      for (const t of chunk) {
+        try {
+          await prisma.$transaction([
+            prisma.transaction.createMany({ data: [t] }),
+            prisma.expenseLine.createMany({
+              data: linesByTx.get(t.id) ?? [],
+            }),
+          ]);
+          inserted.push(t);
+        } catch (rowErr) {
+          console.error("[universal import] row failed:", t, rowErr);
+          failed++;
+        }
+      }
+    }
+  }
+
+  return { inserted, failed };
 }
 
 /** Deterministic dedup key: the bank's reference if present, else synthesized. */

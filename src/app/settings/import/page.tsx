@@ -1,9 +1,17 @@
 import Link from "next/link";
 import { uploadStatementAction } from "@/lib/actions";
 import { getCurrentUser } from "@/lib/user";
+import { SubmitButton } from "@/components/SubmitButton";
 import { isGeminiConfigured } from "@/lib/email/parser";
 
 export const dynamic = "force-dynamic";
+
+// Reading a statement means an LLM round-trip over the whole file, which is far
+// longer than a normal request. The mobile import route already asked for the
+// full 60s; this page's server action was left on the platform default, so a
+// large statement could be cut off mid-import — the rows landed but the reply
+// carrying "it worked" never arrived.
+export const maxDuration = 60;
 
 /**
  * Importing a file has its own page rather than living under Email settings.
@@ -43,6 +51,7 @@ export default async function ImportPage({
   const skipped =
     Number(params.skippedRef ?? "0") + Number(params.skippedFuzzy ?? "0");
   const moved = Number(params.debits ?? "0") + Number(params.credits ?? "0");
+  const added = Number(params.inserted ?? "0");
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
@@ -63,33 +72,98 @@ export default async function ImportPage({
       </header>
 
       {params.status === "imported" ? (
-        <div className="mb-4 rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-900 dark:border-green-900 dark:bg-green-950/40 dark:text-green-200">
-          Imported from {params.bank ?? "statement"}:{" "}
-          <strong>{params.inserted}</strong> new transaction
-          {params.inserted === "1" ? "" : "s"} added
-          {moved > 0 ? (
-            <>
-              {" "}
-              ({params.debits} spent, {params.credits} received)
-            </>
-          ) : null}
-          .
-          {skipped > 0 ? (
-            <>
-              {" "}
-              Skipped {skipped} duplicate{skipped === 1 ? "" : "s"} already on
-              file.
-            </>
-          ) : null}
-          {Number(params.failed ?? "0") > 0 ? (
-            <> {params.failed} rows failed.</>
-          ) : null}
-          {params.warn ? <> {params.warn}</> : null}{" "}
-          <Link href="/" className="font-medium underline">
-            See them on the home page
-          </Link>
-          .
-        </div>
+        /* An import can take a while, so the result has to be impossible to
+           miss when it lands — a one-line strip after a long wait read as
+           nothing having happened at all. */
+        <section
+          role="status"
+          className="mb-6 overflow-hidden rounded-2xl border border-green-300 bg-green-50 dark:border-green-900 dark:bg-green-950/40"
+        >
+          <div className="flex items-start gap-3 p-4 sm:p-5">
+            <span
+              aria-hidden
+              className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-600 text-base font-bold text-white"
+            >
+              ✓
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-lg font-semibold text-green-900 dark:text-green-100 sm:text-xl">
+                {added === 0
+                  ? "Nothing new to add"
+                  : `${added} transaction${added === 1 ? "" : "s"} imported`}
+              </h2>
+              <p className="mt-1 text-sm text-green-800 dark:text-green-200">
+                {added === 0 ? (
+                  <>
+                    Every row in that {params.bank ?? "statement"} was already on
+                    file, so nothing was duplicated.
+                  </>
+                ) : (
+                  <>
+                    Read from your {params.bank ?? "statement"} and added to your
+                    account.
+                  </>
+                )}
+              </p>
+
+              <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+                {moved > 0 ? (
+                  <>
+                    <div>
+                      <dt className="text-xs uppercase tracking-wide text-green-700/80 dark:text-green-300/70">
+                        Spent
+                      </dt>
+                      <dd className="font-semibold tabular-nums text-green-900 dark:text-green-100">
+                        {params.debits}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs uppercase tracking-wide text-green-700/80 dark:text-green-300/70">
+                        Received
+                      </dt>
+                      <dd className="font-semibold tabular-nums text-green-900 dark:text-green-100">
+                        {params.credits}
+                      </dd>
+                    </div>
+                  </>
+                ) : null}
+                {skipped > 0 ? (
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-green-700/80 dark:text-green-300/70">
+                      Already had
+                    </dt>
+                    <dd className="font-semibold tabular-nums text-green-900 dark:text-green-100">
+                      {skipped}
+                    </dd>
+                  </div>
+                ) : null}
+                {Number(params.failed ?? "0") > 0 ? (
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                      Couldn&apos;t read
+                    </dt>
+                    <dd className="font-semibold tabular-nums text-amber-800 dark:text-amber-200">
+                      {params.failed}
+                    </dd>
+                  </div>
+                ) : null}
+              </dl>
+
+              {params.warn ? (
+                <p className="mt-3 text-xs text-green-800/90 dark:text-green-200/90">
+                  {params.warn}
+                </p>
+              ) : null}
+
+              <Link
+                href="/"
+                className="mt-4 inline-flex min-h-[44px] w-full items-center justify-center rounded-lg bg-green-700 px-4 text-sm font-semibold text-white hover:bg-green-800 sm:w-auto"
+              >
+                See them on the home page →
+              </Link>
+            </div>
+          </div>
+        </section>
       ) : null}
       {params.status === "err" ? (
         <div className="mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
@@ -133,9 +207,12 @@ export default async function ImportPage({
               className="input"
             />
           </label>
-          <button type="submit" className="btn-primary">
+          <SubmitButton
+            className="btn-primary w-full gap-2 sm:w-auto"
+            pendingText="Reading your statement…"
+          >
             Import
-          </button>
+          </SubmitButton>
           <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
             Big statements parse faster split by month. Max 10 MB.
           </p>
