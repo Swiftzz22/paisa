@@ -61,9 +61,18 @@ export default function PrivacyPolicy() {
           <Item label="What you ask">
             Questions you put to the Ask feature, and the answers.
           </Item>
+          <Item label="Website visits">
+            The paisa. website (not the iOS app) uses Vercel Web Analytics. It
+            counts page views and records coarse details like country, browser
+            and device type. It sets no cookies, identifies visitors only by a
+            hash of the request that is discarded after 24 hours, and carries no
+            identifier that could follow you to another site. It is not linked
+            to your account.
+          </Item>
           <p className="mt-3 text-sm text-zinc-500">
-            No advertising identifiers, no analytics SDKs, no location, no
-            contacts, no tracking across other apps or websites.
+            No advertising identifiers, no location, no contacts, no third-party
+            analytics inside the app, and no tracking across other apps or
+            websites. Nothing here is sold or used for advertising.
           </p>
         </Section>
 
@@ -106,7 +115,7 @@ export default function PrivacyPolicy() {
         <Section title="Who else sees your data">
           <p>
             paisa. is run by one person and your data is not sold, rented or
-            shared for marketing. It reaches exactly three companies, all as
+            shared for marketing. It reaches these companies, all as
             infrastructure:
           </p>
           <Item label="An AI provider">
@@ -120,6 +129,10 @@ export default function PrivacyPolicy() {
           </Item>
           <Item label="Turso">
             Stores the database.
+          </Item>
+          <Item label="Vercel Web Analytics">
+            Counts visits to the website only, with no cookies and no link to
+            your account. It is not used in the iOS app.
           </Item>
         </Section>
 

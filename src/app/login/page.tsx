@@ -91,6 +91,17 @@ export default async function LoginPage({
           Gmail for transaction import is a separate, optional step inside the
           app.
         </p>
+        <p className="mt-3 text-center text-xs text-zinc-400 dark:text-zinc-500">
+          By continuing you agree to the{" "}
+          <a href="/terms" className="underline">
+            Terms of Use
+          </a>{" "}
+          and{" "}
+          <a href="/privacy" className="underline">
+            Privacy Policy
+          </a>
+          .
+        </p>
       </div>
     </main>
   );

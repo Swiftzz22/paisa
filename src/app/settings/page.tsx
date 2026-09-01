@@ -52,6 +52,12 @@ const TILES: Array<{
       "Connect the native paisa app on your phone. Generate an access token and paste it into the app.",
   },
   {
+    href: "/terms",
+    title: "Terms & Privacy",
+    description:
+      "What paisa. promises, what it collects, who it reaches, and how to delete it.",
+  },
+  {
     href: "/rules",
     title: "Categorization rules",
     description:
