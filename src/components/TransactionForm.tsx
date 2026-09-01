@@ -1,6 +1,7 @@
 import { type CategoryOption } from "@/lib/categories";
 import { toDateInput } from "@/lib/format";
 import { CategorySelect } from "@/components/CategorySelect";
+import { MerchantField } from "@/components/MerchantField";
 
 export type PaymentModeChoice = { value: string; label: string };
 
@@ -75,17 +76,7 @@ export function TransactionForm({
         />
       </Field>
 
-      <Field label="Merchant / person / description" htmlFor="merchant">
-        <input
-          id="merchant"
-          name="merchant"
-          type="text"
-          required
-          defaultValue={initial?.merchant ?? ""}
-          className="input"
-          placeholder="Zomato, Joshika Reddy, Auto to college…"
-        />
-      </Field>
+      <MerchantField originalName={initial?.merchant} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Date" htmlFor="occurredAt">

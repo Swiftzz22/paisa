@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/user";
 import { upsertMerchantRule } from "@/lib/rules";
+import { upsertMerchantAlias } from "@/lib/merchant-alias";
 import { fetchAndStoreRecent } from "@/lib/email/fetch";
 import {
   deleteEmailAccount,
@@ -82,6 +83,8 @@ type TransactionFormFields = {
   categoryId: string;
   note: string | null;
   saveRule: boolean;
+  /** Reuse this merchant name for the bank's original text in future. */
+  saveAlias: boolean;
   type: "debit" | "credit";
 };
 
@@ -117,6 +120,7 @@ async function readTransactionForm(
     categoryId,
     note: note ? note : null,
     saveRule: readBool(form, "saveRule"),
+    saveAlias: readBool(form, "saveAlias"),
     type,
   };
 }
@@ -196,6 +200,7 @@ export async function updateTransactionAction(id: string, form: FormData) {
   });
 
   let retroCount = 0;
+  let ruleSaved = false;
   if (data.saveRule) {
     const r = await upsertMerchantRule({
       userId: user.id,
@@ -203,13 +208,55 @@ export async function updateTransactionAction(id: string, form: FormData) {
       categoryId: data.categoryId,
     });
     retroCount = r.retroactivelyApplied;
+    ruleSaved = true;
+  }
+
+  // Renaming a merchant teaches the app what to call it, the same way changing
+  // a category teaches it where things belong.
+  let renamedCount = 0;
+  let aliasSaved = false;
+  const merchantChanged =
+    data.saveAlias && data.merchant.trim() !== existing.merchant.trim();
+  if (merchantChanged) {
+    const a = await upsertMerchantAlias({
+      userId: user.id,
+      originalMerchant: existing.merchant,
+      displayName: data.merchant,
+      skipTransactionId: id,
+    });
+    renamedCount = a.renamed;
+    aliasSaved = true;
   }
 
   revalidatePath("/");
   revalidatePath(`/transactions/${id}/edit`);
   revalidatePath("/rules");
-  if (retroCount > 0) {
-    redirect(`/?ruleApplied=${retroCount}&merchant=${encodeURIComponent(data.merchant)}`);
+
+  // Say what was learned, always — not only when past transactions happened to
+  // be updated. Saving a rule and hearing nothing back reads as nothing having
+  // happened, which is exactly the case that used to fall silent.
+  if (ruleSaved || aliasSaved) {
+    const params = new URLSearchParams({ merchant: data.merchant });
+    if (ruleSaved) {
+      const category = await prisma.category.findFirst({
+        where: { id: data.categoryId, userId: user.id },
+        select: { name: true, parent: { select: { name: true } } },
+      });
+      params.set(
+        "learnedCategory",
+        category
+          ? category.parent
+            ? `${category.parent.name} › ${category.name}`
+            : category.name
+          : "that category"
+      );
+      if (retroCount > 0) params.set("ruleApplied", String(retroCount));
+    }
+    if (aliasSaved) {
+      params.set("learnedName", existing.merchant);
+      if (renamedCount > 0) params.set("renamed", String(renamedCount));
+    }
+    redirect(`/?${params.toString()}`);
   }
   redirect("/");
 }

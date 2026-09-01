@@ -14,6 +14,7 @@ import {
   type UniversalParseResult,
 } from "@/lib/statement-universal";
 import { getCategoryOptions } from "@/lib/categories";
+import { applyAlias, getAliasMap } from "@/lib/merchant-alias";
 
 const HSBC_CARDHOLDER = "SANIA KOTHARI";
 const HSBC_CUTOFF = new Date(2026, 0, 1); // Jan 1, 2026 — per user spec
@@ -81,6 +82,14 @@ export async function persistUniversalRows(params: {
   labelToId: Map<string, string>;
 }): Promise<ImportResult> {
   const { parsed, labelToId } = params;
+
+  // Names the user has already corrected are applied before anything else, so
+  // dedup compares like with like: stored rows were renamed retroactively when
+  // the alias was created, and these rows now carry the same name.
+  const aliases = await getAliasMap(params.userId);
+  for (const row of parsed.rows) {
+    row.merchant = applyAlias(aliases, row.merchant);
+  }
 
   const out: ImportResult = {
     bank: parsed.bank,

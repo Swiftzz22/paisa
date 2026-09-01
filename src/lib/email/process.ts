@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { applyAlias, getAliasMap } from "@/lib/merchant-alias";
 import { looksLikeTransactionEmail } from "@/lib/email/classify";
 import {
   extractTransactionBatch,
@@ -106,6 +107,10 @@ export async function processPendingForUser(
     orderBy: { priority: "desc" },
   });
 
+  // Names the user has already corrected. Applied before the duplicate check
+  // so a renamed merchant is compared against stored rows under the same name.
+  const aliases = await getAliasMap(userId);
+
   let parsed = 0;
   let ignored = toIgnore.length;
   let failed = 0;
@@ -179,6 +184,10 @@ export async function processPendingForUser(
         continue;
       }
 
+      // Resolve the display name first: a rule the user taught was saved
+      // against the name they saw, which is the corrected one.
+      const merchantName = applyAlias(aliases, extract.merchant);
+
       // Pick category — for debits, user-taught rules win over LLM suggestion.
       // For credits, skip rules (they're tuned for spending merchants) and trust
       // the LLM's Income › X choice, falling back to Income › Other.
@@ -190,7 +199,7 @@ export async function processPendingForUser(
         categoryId =
           llmCategoryId ?? (await incomeOtherFallback(userId)) ?? (await miscFallback(userId));
       } else {
-        const ruleCategoryId = pickRuleCategory(rules, extract.merchant);
+        const ruleCategoryId = pickRuleCategory(rules, merchantName);
         categoryId =
           ruleCategoryId ?? llmCategoryId ?? (await miscFallback(userId));
       }
@@ -205,7 +214,7 @@ export async function processPendingForUser(
 
       const dup = await findDuplicateTransaction({
         userId,
-        merchant: extract.merchant,
+        merchant: merchantName,
         amount,
         occurredAt: txAt,
         type: extract.kind,
@@ -225,7 +234,7 @@ export async function processPendingForUser(
       await prisma.transaction.create({
         data: {
           userId,
-          merchant: extract.merchant,
+          merchant: merchantName,
           merchantRaw: email.fromAddress,
           amount,
           occurredAt: txAt,

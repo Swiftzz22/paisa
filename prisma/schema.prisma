@@ -41,6 +41,7 @@ model User {
   importBatches       ImportBatch[]
   receivedEmails      ReceivedEmail[]
   categorizationRules CategorizationRule[]
+  merchantAliases     MerchantAlias[]
   emailAccounts       EmailAccount[]
   paymentModes        PaymentMode[]
   budgets             Budget[]
@@ -229,6 +230,31 @@ model Category {
   budgets  Budget[]
 
   @@unique([userId, parentId, name])
+}
+
+/// A friendlier name for a merchant string the bank gave us.
+///
+/// UPI narrations arrive as things like "DEVMAN VENTURES PRIVAT" or a stranger's
+/// legal name, which nobody can match to a purchase they actually remember. When
+/// someone corrects one, that correction is kept and reused: the same raw string
+/// is renamed on sight from then on, and past transactions are brought along.
+///
+/// Keyed on the *original* text, not the display name, so a second rename simply
+/// updates where the same key points.
+model MerchantAlias {
+  id          String   @id @default(uuid())
+  userId      String
+  /// Normalized (trimmed, lowercased) original merchant text.
+  matchValue  String
+  /// What to show instead.
+  displayName String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, matchValue])
+  @@index([userId])
 }
 
 /// User-supplied corrections that compound into accuracy.

@@ -50,6 +50,10 @@ type SearchParams = Promise<{
   rateLimited?: string;
   error?: string;
   ruleApplied?: string;
+  /** Set when a correction taught the app something, so it can say so. */
+  learnedCategory?: string;
+  learnedName?: string;
+  renamed?: string;
   merchant?: string;
   q?: string;
   /** Which six-month window the hero's month bars show; 0 = the most recent. */
@@ -265,7 +269,42 @@ export default async function Home({
           {params.rateLimited === "1" ? " Hit the rate limit — tap again in a minute." : ""}
         </Banner>
       ) : null}
-      {params.ruleApplied && Number(params.ruleApplied) > 0 ? (
+      {/* What the app just learned from a correction. Worth saying out loud:
+          a correction that produces silence reads as one that didn't take, and
+          the whole point of the rules is that they compound. */}
+      {params.learnedCategory || params.learnedName ? (
+        <Banner tone="ok">
+          <span className="font-medium">Got it.</span>{" "}
+          {params.learnedCategory ? (
+            <>
+              I&rsquo;ll file {params.merchant ?? "this merchant"} under{" "}
+              <strong>{params.learnedCategory}</strong> from now on
+              {Number(params.ruleApplied ?? "0") > 0 ? (
+                <>
+                  {" "}
+                  — and I updated {params.ruleApplied} earlier one
+                  {params.ruleApplied === "1" ? "" : "s"}
+                </>
+              ) : null}
+              .{" "}
+            </>
+          ) : null}
+          {params.learnedName ? (
+            <>
+              I&rsquo;ll show &ldquo;{params.learnedName}&rdquo; as{" "}
+              <strong>{params.merchant}</strong> from now on
+              {Number(params.renamed ?? "0") > 0 ? (
+                <>
+                  {" "}
+                  — and renamed {params.renamed} earlier one
+                  {params.renamed === "1" ? "" : "s"}
+                </>
+              ) : null}
+              .
+            </>
+          ) : null}
+        </Banner>
+      ) : params.ruleApplied && Number(params.ruleApplied) > 0 ? (
         <Banner tone="ok">
           Rule applied to {params.ruleApplied} existing transaction
           {params.ruleApplied === "1" ? "" : "s"}.
