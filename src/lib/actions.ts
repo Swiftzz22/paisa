@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/user";
 import { upsertMerchantRule } from "@/lib/rules";
 import { upsertMerchantAlias } from "@/lib/merchant-alias";
+import { deleteAllTransactions, deleteImport } from "@/lib/data-removal";
 import { fetchAndStoreRecent } from "@/lib/email/fetch";
 import {
   deleteEmailAccount,
@@ -705,4 +706,39 @@ export async function deleteRuleAction(id: string) {
   await prisma.categorizationRule.delete({ where: { id } });
   revalidatePath("/rules");
   redirect("/rules");
+}
+
+/** Undo one statement import, removing the transactions it created. */
+export async function deleteImportAction(form: FormData) {
+  const user = await getCurrentUser();
+  const batchId = readString(form, "batchId");
+  if (!batchId) redirect("/settings/data?status=err&error=Nothing+selected.");
+
+  const { deleted } = await deleteImport(user.id, batchId);
+  revalidatePath("/");
+  revalidatePath("/settings/data");
+  redirect(`/settings/data?status=removed&count=${deleted}`);
+}
+
+/**
+ * Remove every transaction while keeping the account.
+ *
+ * Guarded by typing DELETE: it is not reversible, and it is one tap away from
+ * the far milder "remove one import" above it.
+ */
+export async function deleteAllTransactionsAction(form: FormData) {
+  const user = await getCurrentUser();
+  if (readString(form, "confirm").trim().toUpperCase() !== "DELETE") {
+    redirect(
+      "/settings/data?status=err&error=" +
+        encodeURIComponent('Type DELETE to confirm. Nothing was removed.')
+    );
+  }
+
+  const { deleted, emailsReset } = await deleteAllTransactions(user.id);
+  revalidatePath("/");
+  revalidatePath("/settings/data");
+  redirect(
+    `/settings/data?status=cleared&count=${deleted}&emails=${emailsReset}`
+  );
 }

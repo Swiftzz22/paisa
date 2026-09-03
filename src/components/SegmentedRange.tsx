@@ -19,10 +19,13 @@ export function SegmentedRange({
   activePreset,
   fromInput,
   toInput,
+  showPresets = true,
 }: {
   activePreset: string;
   fromInput: string;
   toInput: string;
+  /** False once the period arrows are shown — two pickers is one too many. */
+  showPresets?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -41,7 +44,8 @@ export function SegmentedRange({
   }
 
   return (
-    <div className="mt-4">
+    <div className={showPresets ? "mt-4" : "mt-1.5"}>
+      {showPresets ? (
       <div
         className={
           "flex gap-1 rounded-2xl border border-zinc-200/80 bg-zinc-100/70 p-1 transition-opacity dark:border-zinc-800 dark:bg-zinc-900/60 " +
@@ -68,7 +72,8 @@ export function SegmentedRange({
           );
         })}
       </div>
-      <details className="mt-1.5 px-1">
+      ) : null}
+      <details className="px-1">
         <summary className="cursor-pointer list-none text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
           Custom range ›
         </summary>

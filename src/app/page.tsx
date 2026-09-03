@@ -3,7 +3,13 @@ import { getCurrentUser } from "@/lib/user";
 import { prisma } from "@/lib/prisma";
 import { formatINR } from "@/lib/format";
 import { paymentModeLabel } from "@/lib/categories";
-import { parseRangeFromParams, toDateInput } from "@/lib/range";
+import {
+  grainOfRange,
+  parseRangeFromParams,
+  periodContaining,
+  shiftPeriod,
+  toDateInput,
+} from "@/lib/range";
 import {
   getRangeSummary,
   type TxRow,
@@ -14,6 +20,12 @@ import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { recategorizeMiscAction } from "@/lib/actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { SegmentedRange } from "@/components/SegmentedRange";
+import {
+  CalendarMonth,
+  Highlights,
+  PeriodBar,
+  WeekStrip,
+} from "@/components/PeriodViews";
 import { getBudgetProgress, getMonthOverMonthDelta } from "@/lib/budgets";
 import {
   clockTime,
@@ -211,6 +223,64 @@ export default async function Home({
     fromParts.year === nowParts.year &&
     fromParts.month === nowParts.month;
 
+  // Which period is being viewed, so it can be stepped through rather than
+  // only picked. An arbitrary custom range has no grain; the bar is hidden.
+  const grain = grainOfRange(range, tzOffset);
+  const period = grain ? periodContaining(grain, range.from, tzOffset) : null;
+  const periodHref = (p: { from: Date; to: Date }) =>
+    buildRangeHref(params, toDateInput(p.from, tzOffset), toDateInput(p.to, tzOffset));
+
+  // Per-day totals for the calendar and week strip, from the uncapped filtered
+  // rows so a heavy month is shaded by everything in it, not the first 500.
+  const dayTotals = new Map<number, { spent: number; received: number; count: number }>();
+  if (grain === "month" || grain === "week") {
+    for (const t of summary.txs) {
+      const { day } = localParts(t.occurredAt, tzOffset);
+      const cur = dayTotals.get(day) ?? { spent: 0, received: 0, count: 0 };
+      if (t.type === "credit") cur.received += t.amount;
+      else cur.spent += t.amount;
+      cur.count++;
+      dayTotals.set(day, cur);
+    }
+  }
+  const dayHref = (d: Date) => {
+    const iso = toDateInput(d, tzOffset);
+    return buildRangeHref(params, iso, iso);
+  };
+
+  // The one or two transactions that explain the total, plus the heaviest day.
+  const debits = summary.txs.filter((t) => t.type === "debit");
+  const credits = summary.txs.filter((t) => t.type === "credit");
+  const biggestOut = debits.reduce<TxRow | null>(
+    (a, b) => (!a || b.amount > a.amount ? b : a),
+    null
+  );
+  const biggestIn = credits.reduce<TxRow | null>(
+    (a, b) => (!a || b.amount > a.amount ? b : a),
+    null
+  );
+  const highlights = [];
+  if (biggestOut) {
+    highlights.push({
+      label: "Biggest spend",
+      merchant: biggestOut.merchant,
+      amount: biggestOut.amount,
+      sub: `${biggestOut.categoryRollupName} · ${dayLabel(biggestOut.occurredAt, tzOffset)}`,
+      href: `/transactions/${biggestOut.id}/edit`,
+      tone: "out" as const,
+    });
+  }
+  if (biggestIn) {
+    highlights.push({
+      label: "Biggest received",
+      merchant: biggestIn.merchant,
+      amount: biggestIn.amount,
+      sub: `${biggestIn.categoryRollupName} · ${dayLabel(biggestIn.occurredAt, tzOffset)}`,
+      href: `/transactions/${biggestIn.id}/edit`,
+      tone: "in" as const,
+    });
+  }
+
   return (
     <main className="mx-auto w-full max-w-md px-4 pb-6 pt-[max(1rem,env(safe-area-inset-top))] sm:max-w-lg sm:pt-6">
       <Header name={user.name} image={user.image} />
@@ -227,10 +297,24 @@ export default async function Home({
         newerMonthsHref={newerMonthsHref}
       />
 
+      {period ? (
+        <PeriodBar
+          period={period}
+          prevHref={periodHref(shiftPeriod(period, -1, tzOffset))}
+          nextHref={
+            period.isCurrent
+              ? null
+              : periodHref(shiftPeriod(period, +1, tzOffset))
+          }
+          grainHref={(g) => periodHref(periodContaining(g, range.from, tzOffset))}
+        />
+      ) : null}
+
       <SegmentedRange
         activePreset={range.preset}
         fromInput={toDateInput(range.from, tzOffset)}
         toInput={toDateInput(range.to, tzOffset)}
+        showPresets={!period}
       />
 
       <FlowRow
@@ -239,6 +323,35 @@ export default async function Home({
         received={summary.received}
         net={summary.total}
       />
+
+      <Highlights items={highlights} />
+
+      {grain === "month" && period ? (
+        <CalendarMonth
+          monthStart={period.from}
+          tzOffset={tzOffset}
+          days={[...dayTotals.entries()].map(([day, v]) => ({
+            day,
+            ...v,
+            href: dayHref(
+              new Date(period.from.getTime() + (day - 1) * 86400000)
+            ),
+          }))}
+        />
+      ) : null}
+
+      {grain === "week" && period ? (
+        <WeekStrip
+          weekStart={period.from}
+          tzOffset={tzOffset}
+          days={Array.from({ length: 7 }, (_, i) => {
+            const d = new Date(period.from.getTime() + i * 86400000);
+            const day = localParts(d, tzOffset).day;
+            const v = dayTotals.get(day) ?? { spent: 0, received: 0, count: 0 };
+            return { day, ...v, href: dayHref(d) };
+          })}
+        />
+      ) : null}
 
       <section className="mt-3 grid grid-cols-2 gap-3">
         <MiniTile
@@ -908,6 +1021,32 @@ function monthHref(
   next.set("to", `${monthKey}-${String(last).padStart(2, "0")}`);
   return `/?${next.toString()}`;
 }
+
+/** A link to an explicit from/to range, keeping filters but dropping preset. */
+function buildRangeHref(
+  params: Record<string, string | undefined>,
+  from: string,
+  to: string
+): string {
+  const next = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v && k !== "range" && k !== "from" && k !== "to") next.set(k, v);
+  }
+  next.set("from", from);
+  next.set("to", to);
+  return `/?${next.toString()}`;
+}
+
+/** "12 Aug" — enough to place a transaction without repeating the year. */
+function dayLabel(d: Date, tz: number): string {
+  const { month, day } = localParts(d, tz);
+  return `${day} ${MONTHS_SHORT[month]}`;
+}
+
+const MONTHS_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 function buildHref(
   params: Record<string, string | undefined>,

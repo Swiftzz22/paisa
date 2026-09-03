@@ -162,3 +162,147 @@ export function toDateInput(d: Date, tz = 0): string {
   const pad = (n: number) => n.toString().padStart(2, "0");
   return `${year}-${pad(month + 1)}-${pad(day)}`;
 }
+
+// ── Navigating whole periods ──────────────────────────────────────────────
+//
+// The presets above are all anchored to "now", which is fine for looking at
+// the current day, week or month and useless for looking at a past one. These
+// helpers describe an arbitrary period and step to the one before or after, so
+// the dashboard can walk backwards a day or a week at a time rather than only
+// offering a date picker.
+
+/** The size of a period, independent of which one is selected. */
+export type Grain = "day" | "week" | "month" | "year";
+
+export type Period = {
+  grain: Grain;
+  from: Date;
+  to: Date;
+  /** "Tue 12 Aug", "12 – 18 Aug", "August 2026", "2026". */
+  label: string;
+  /** True when the period contains today, so the UI can say "Today". */
+  isCurrent: boolean;
+};
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function shortDate(d: Date, tz: number, withMonth = true): string {
+  const { month, day } = localParts(d, tz);
+  return withMonth ? `${day} ${MONTH_NAMES[month].slice(0, 3)}` : String(day);
+}
+
+/** The period of the given grain that contains `d`. */
+export function periodContaining(grain: Grain, d: Date, tz: number): Period {
+  const now = new Date();
+  const p = localParts(d, tz);
+
+  if (grain === "day") {
+    const from = startOfDay(d, tz);
+    const to = endOfDay(d, tz);
+    const today = localParts(now, tz);
+    const isToday =
+      p.year === today.year && p.month === today.month && p.day === today.day;
+    return {
+      grain,
+      from,
+      to,
+      label: isToday
+        ? "Today"
+        : `${DAY_NAMES[p.weekday]} ${p.day} ${MONTH_NAMES[p.month].slice(0, 3)}`,
+      isCurrent: isToday,
+    };
+  }
+
+  if (grain === "week") {
+    const from = startOfWeek(d, tz);
+    const endParts = localParts(from, tz);
+    const to = atLocal(
+      tz,
+      endParts.year,
+      endParts.month,
+      endParts.day + 6,
+      23,
+      59,
+      59,
+      999
+    );
+    const fromP = localParts(from, tz);
+    const toP = localParts(to, tz);
+    // "12 – 18 Aug" when the week sits inside one month, "29 Jul – 4 Aug" when
+    // it straddles two.
+    const label =
+      fromP.month === toP.month
+        ? `${fromP.day} – ${toP.day} ${MONTH_NAMES[toP.month].slice(0, 3)}`
+        : `${shortDate(from, tz)} – ${shortDate(to, tz)}`;
+    const thisWeek = startOfWeek(now, tz);
+    return { grain, from, to, label, isCurrent: +from === +thisWeek };
+  }
+
+  if (grain === "month") {
+    const from = atLocal(tz, p.year, p.month, 1);
+    const to = atLocal(tz, p.year, p.month + 1, 0, 23, 59, 59, 999);
+    const nowP = localParts(now, tz);
+    return {
+      grain,
+      from,
+      to,
+      label: `${MONTH_NAMES[p.month]} ${p.year}`,
+      isCurrent: p.year === nowP.year && p.month === nowP.month,
+    };
+  }
+
+  const from = atLocal(tz, p.year, 0, 1);
+  const to = atLocal(tz, p.year, 11, 31, 23, 59, 59, 999);
+  return {
+    grain,
+    from,
+    to,
+    label: String(p.year),
+    isCurrent: p.year === localParts(now, tz).year,
+  };
+}
+
+/** The same-sized period `step` places away (-1 = previous, +1 = next). */
+export function shiftPeriod(period: Period, step: number, tz: number): Period {
+  const p = localParts(period.from, tz);
+  switch (period.grain) {
+    case "day":
+      return periodContaining("day", atLocal(tz, p.year, p.month, p.day + step), tz);
+    case "week":
+      return periodContaining(
+        "week",
+        atLocal(tz, p.year, p.month, p.day + step * 7),
+        tz
+      );
+    case "month":
+      return periodContaining("month", atLocal(tz, p.year, p.month + step, 1), tz);
+    case "year":
+      return periodContaining("year", atLocal(tz, p.year + step, 0, 1), tz);
+  }
+}
+
+/**
+ * Which grain a from/to range represents, if any.
+ *
+ * Lets an arbitrary custom range still drive the period arrows when it happens
+ * to line up with a whole day, week or month — which is what every link the
+ * dashboard generates produces.
+ */
+export function grainOfRange(range: DateRange, tz: number): Grain | null {
+  for (const grain of ["day", "week", "month", "year"] as const) {
+    const p = periodContaining(grain, range.from, tz);
+    // Compared on the calendar day rather than the millisecond: "this month"
+    // runs to today, not to the 31st, and should still count as a month.
+    const a = localParts(p.from, tz);
+    const b = localParts(range.from, tz);
+    if (a.year !== b.year || a.month !== b.month || a.day !== b.day) continue;
+    const pe = localParts(p.to, tz);
+    const re = localParts(range.to, tz);
+    if (pe.year === re.year && pe.month === re.month && pe.day === re.day) {
+      return grain;
+    }
+    // A current period that ends "now" instead of at the period's end.
+    if (p.isCurrent && re.year <= pe.year) return grain;
+  }
+  return null;
+}
