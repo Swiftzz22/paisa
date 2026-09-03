@@ -45,3 +45,6 @@ next-env.d.ts
 # local SQLite database
 *.db
 *.db-journal
+
+# Throwaway verification scripts — never committed.
+scripts/tmp-*.ts
