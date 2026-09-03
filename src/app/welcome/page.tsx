@@ -34,6 +34,8 @@ export default async function WelcomePage() {
       desc: `Signed in as ${user.email}. Nothing else was shared.`,
       href: null,
       cta: null,
+      altHref: null,
+      altCta: null,
     },
     {
       done: categoryCount > 0,
@@ -44,6 +46,8 @@ export default async function WelcomePage() {
           : "Set up automatically the first time you sign in.",
       href: "/settings/categories",
       cta: "Review categories",
+      altHref: null,
+      altCta: null,
     },
     {
       done: txCount > 0,
@@ -51,9 +55,17 @@ export default async function WelcomePage() {
       desc:
         txCount > 0
           ? `${txCount.toLocaleString("en-IN")} transactions so far.`
-          : "Connect an inbox to have bank alerts read automatically, or upload a statement — no email access needed.",
-      href: txCount > 0 ? "/" : "/settings/import",
-      cta: txCount > 0 ? "See them" : "Upload a statement",
+          : inboxCount > 0
+            ? "Your inbox is connected — bank alerts will appear here on their own."
+            : "paisa. reads the alerts your bank already emails you and turns them into transactions.",
+      href: txCount > 0 ? "/" : "/settings/email",
+      cta: txCount > 0 ? "See them" : "Connect an inbox",
+      // One recommendation, with the alternative available but plainly
+      // subordinate. Two buttons of equal weight is the thing Hick's law
+      // penalises; a link under a button is a hierarchy, not a choice.
+      altHref: txCount > 0 ? null : "/settings/import",
+      altCta:
+        txCount > 0 ? null : "or upload a statement instead — no email needed",
     },
     {
       done: budgetCount > 0,
@@ -64,10 +76,20 @@ export default async function WelcomePage() {
           : "Optional. Once you have a month of spending, paisa. can warn you before you overshoot.",
       href: "/settings/budgets",
       cta: "Set a budget",
+      altHref: null,
+      altCta: null,
     },
   ];
 
   const doneCount = steps.filter((s) => s.done).length;
+
+  // Hick's law: the time to choose grows with the number of options being
+  // weighed, and this screen was offering six at the moment someone knows
+  // least about the app — a button on every step plus two more underneath.
+  // Only the next unfinished step is actionable now; the rest are status.
+  // The others stay visible as context, because a checklist you cannot see
+  // the end of is its own problem.
+  const nextIndex = steps.findIndex((s) => !s.done);
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-10 sm:px-6 sm:py-16">
@@ -98,7 +120,7 @@ export default async function WelcomePage() {
       </div>
 
       <ol className="space-y-2">
-        {steps.map((s) => (
+        {steps.map((s, i) => (
           <li
             key={s.title}
             className={
@@ -133,13 +155,23 @@ export default async function WelcomePage() {
               <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
                 {s.desc}
               </p>
-              {s.href && s.cta ? (
-                <Link
-                  href={s.href}
-                  className="mt-2 inline-flex min-h-[36px] items-center rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
-                >
-                  {s.cta}
-                </Link>
+              {i === nextIndex && s.href && s.cta ? (
+                <>
+                  <Link
+                    href={s.href}
+                    className="btn-primary mt-3 w-full justify-center sm:w-auto sm:px-5"
+                  >
+                    {s.cta}
+                  </Link>
+                  {s.altHref && s.altCta ? (
+                    <Link
+                      href={s.altHref}
+                      className="mt-2 block text-xs text-zinc-500 underline dark:text-zinc-400"
+                    >
+                      {s.altCta}
+                    </Link>
+                  ) : null}
+                </>
               ) : null}
             </div>
           </li>
@@ -163,20 +195,16 @@ export default async function WelcomePage() {
         </p>
       </div>
 
-      <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+      {/* One way onward, as a quiet link rather than a second button
+          competing with the step above it. */}
+      <p className="mt-6 text-center">
         <Link
           href="/"
-          className="btn-primary flex-1 justify-center sm:flex-none sm:px-6"
+          className="text-sm text-zinc-600 underline dark:text-zinc-400"
         >
           {txCount > 0 ? "Go to my dashboard" : "Skip for now"}
         </Link>
-        <Link
-          href="/settings/import"
-          className="btn-secondary flex-1 justify-center sm:flex-none sm:px-6"
-        >
-          Upload a statement
-        </Link>
-      </div>
+      </p>
 
       <p className="mt-6 text-center text-xs text-zinc-400">
         <Link href="/privacy" className="underline">
