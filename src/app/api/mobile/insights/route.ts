@@ -58,10 +58,12 @@ async function loadRows(userId: string, from: Date, to: Date): Promise<Row[]> {
     const cat = t.lines[0]?.category ?? null;
     const parent = cat?.parent ?? null;
     return {
+      id: t.id,
       at: t.occurredAt.getTime(),
       amount: Number(t.amount),
       type: t.type === "credit" ? "credit" : "debit",
       category: parent?.name ?? cat?.name ?? "Uncategorized",
+      merchant: t.merchant,
       mode: t.paymentMode,
     };
   });
@@ -93,10 +95,12 @@ function rangeFor(period: Period, now: Date, tzOffset: number): Range {
 }
 
 type Row = {
+  id: string;
   at: number;
   amount: number;
   type: "debit" | "credit";
   category: string;
+  merchant: string;
   mode: string;
 };
 
@@ -106,7 +110,8 @@ function summarize(
   from: Date,
   to: Date,
   label: string,
-  colorFor: (category: string) => string
+  colorFor: (category: string) => string,
+  tzOffset = 0
 ) {
   const inRange = rows.filter(
     (r) => r.at >= from.getTime() && r.at <= to.getTime()
@@ -174,7 +179,73 @@ function summarize(
     txCount: inRange.length,
     categories,
     paymentModes,
+    // Per-calendar-day totals, so the app can draw a month or a week without
+    // shipping every transaction to the device to add them up itself.
+    days: dayTotals(inRange, tzOffset),
+    // The transactions that explain the total. Almost every "where did it go"
+    // is answered by the largest one or two, and hunting for them in a long
+    // list is the thing this replaces.
+    highlights: pickHighlights(inRange),
   };
+}
+
+export type DayTotal = {
+  /** Calendar date in the viewer's zone, YYYY-MM-DD. */
+  date: string;
+  spent: number;
+  received: number;
+  txCount: number;
+};
+
+function dayTotals(rows: Row[], tzOffset: number): DayTotal[] {
+  const map = new Map<string, DayTotal>();
+  for (const r of rows) {
+    const { year, month, day } = localParts(new Date(r.at), tzOffset);
+    const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const cur =
+      map.get(key) ?? { date: key, spent: 0, received: 0, txCount: 0 };
+    if (r.type === "credit") cur.received += r.amount;
+    else cur.spent += r.amount;
+    cur.txCount++;
+    map.set(key, cur);
+  }
+  return Array.from(map.values())
+    .map((d) => ({
+      ...d,
+      spent: Math.round(d.spent),
+      received: Math.round(d.received),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function pickHighlights(rows: Row[]) {
+  const biggest = (type: "debit" | "credit") =>
+    rows
+      .filter((r) => r.type === type)
+      .reduce<Row | null>((a, b) => (!a || b.amount > a.amount ? b : a), null);
+
+  const out: Array<{
+    kind: "spend" | "received";
+    id: string;
+    merchant: string;
+    category: string;
+    amount: number;
+    at: string;
+  }> = [];
+  const add = (kind: "spend" | "received", r: Row | null) => {
+    if (!r) return;
+    out.push({
+      kind,
+      id: r.id,
+      merchant: r.merchant,
+      category: r.category,
+      amount: Math.round(r.amount),
+      at: new Date(r.at).toISOString(),
+    });
+  };
+  add("spend", biggest("debit"));
+  add("received", biggest("credit"));
+  return out;
 }
 
 /**
@@ -207,7 +278,7 @@ export async function GET(req: NextRequest) {
     const rangeRows = await loadRows(user.id, lo, hi);
     const colorFor = buildColorMap(rangeRows);
     return Response.json({
-      range: summarize(rangeRows, "month", lo, hi, rangeLabel(lo, hi, tzOffset), colorFor),
+      range: summarize(rangeRows, "month", lo, hi, rangeLabel(lo, hi, tzOffset), colorFor, tzOffset),
     });
   }
   const year = rangeFor("year", now, tzOffset);
@@ -254,7 +325,7 @@ export async function GET(req: NextRequest) {
   const periods = Object.fromEntries(
     PERIODS.map((p) => {
       const r = p === "year" ? year : rangeFor(p, now, tzOffset);
-      return [p, summarize(rows, p, r.from, r.to, r.label, colorFor)];
+      return [p, summarize(rows, p, r.from, r.to, r.label, colorFor, tzOffset)];
     })
   ) as Record<Period, ReturnType<typeof summarize>>;
 
