@@ -38,58 +38,59 @@ const GRAINS: Array<{ id: Grain; label: string }> = [
  */
 export function PeriodBar({
   period,
-  prevHref,
-  nextHref,
+  anchorInput,
   grainHref,
 }: {
   period: Period;
-  prevHref: string;
-  /** Null when the period already includes today — there is no future to see. */
-  nextHref: string | null;
+  /** The current period's start as YYYY-MM-DD, to seed the picker. */
+  anchorInput: string;
   grainHref: (g: Grain) => string;
 }) {
   return (
     <section className="mt-3 space-y-2">
-      <div className="flex items-center gap-2">
-        <Link
-          href={prevHref}
-          aria-label={`Previous ${period.grain}`}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 text-lg text-zinc-600 dark:border-zinc-800 dark:text-zinc-400"
-        >
-          ‹
-        </Link>
-        <div className="min-w-0 flex-1 text-center">
-          <div className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            {period.label}
-          </div>
-          {period.isCurrent ? (
-            <div className="text-[11px] uppercase tracking-wide text-zinc-400">
-              so far
-            </div>
-          ) : null}
-        </div>
-        {nextHref ? (
-          <Link
-            href={nextHref}
-            aria-label={`Next ${period.grain}`}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 text-lg text-zinc-600 dark:border-zinc-800 dark:text-zinc-400"
-          >
-            ›
-          </Link>
-        ) : (
-          <span
-            aria-hidden
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-transparent text-lg text-zinc-300 dark:text-zinc-700"
-          >
-            ›
-          </span>
-        )}
-      </div>
-
-      <nav
-        aria-label="Period size"
-        className="grid grid-cols-4 gap-1.5"
+      {/* A date rather than arrows. Stepping one period at a time is fine for
+          last month and hopeless for last March, so the label is a picker: a
+          chosen date means that day, its week, its month or its year,
+          depending on the size selected below. */}
+      <form
+        method="GET"
+        action="/"
+        className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/40"
       >
+        <input type="hidden" name="grain" value={period.grain} />
+        <label htmlFor="jump" className="sr-only">
+          Jump to a date
+        </label>
+        <span aria-hidden className="text-zinc-400">
+          📅
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+            {period.label}
+            {period.isCurrent ? (
+              <span className="ml-2 text-[11px] font-normal uppercase tracking-wide text-zinc-400">
+                so far
+              </span>
+            ) : null}
+          </span>
+          <input
+            id="jump"
+            type="date"
+            name="on"
+            defaultValue={anchorInput}
+            max={new Date().toISOString().slice(0, 10)}
+            className="mt-1 w-full bg-transparent text-xs text-zinc-500 outline-none dark:text-zinc-400"
+          />
+        </span>
+        <button
+          type="submit"
+          className="min-h-[40px] shrink-0 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
+        >
+          Go
+        </button>
+      </form>
+
+      <nav aria-label="Period size" className="grid grid-cols-4 gap-1.5">
         {GRAINS.map((g) => {
           const on = g.id === period.grain;
           return (

@@ -7,7 +7,6 @@ import {
   grainOfRange,
   parseRangeFromParams,
   periodContaining,
-  shiftPeriod,
   toDateInput,
 } from "@/lib/range";
 import {
@@ -70,6 +69,10 @@ type SearchParams = Promise<{
   q?: string;
   /** Which six-month window the hero's month bars show; 0 = the most recent. */
   mo?: string;
+  /** Period size chosen from the tabs. */
+  grain?: string;
+  /** A date picked from the calendar; the grain decides what it means. */
+  on?: string;
 }>;
 
 // ── Category → icon + color, so transactions read at a glance (Quicken-style) ──
@@ -111,7 +114,28 @@ export default async function Home({
   const params = await searchParams;
   const user = await getCurrentUser();
   const tzOffset = await getTzOffset();
-  const { range, warning } = parseRangeFromParams(params, new Date(), tzOffset);
+  // A grain plus an optional date beats an explicit from/to: picking 3 March
+  // with "Week" selected should show that whole week, not just that day.
+  const pickedGrain = (["day", "week", "month", "year"] as const).find(
+    (g) => g === params.grain
+  );
+  const pickedDate = params.on ? parseDateParam(params.on, tzOffset) : null;
+  const derived =
+    pickedGrain || pickedDate
+      ? periodContaining(pickedGrain ?? "month", pickedDate ?? new Date(), tzOffset)
+      : null;
+
+  const { range, warning } = derived
+    ? {
+        range: {
+          preset: "custom" as const,
+          from: derived.from,
+          to: derived.to,
+          label: derived.label,
+        },
+        warning: null,
+      }
+    : parseRangeFromParams(params, new Date(), tzOffset);
   const categoryFilter = params.category ?? null;
   const paymentModeFilter = params.paymentMode ?? null;
   const searchQuery = (params.q ?? "").trim() || null;
@@ -300,13 +324,11 @@ export default async function Home({
       {period ? (
         <PeriodBar
           period={period}
-          prevHref={periodHref(shiftPeriod(period, -1, tzOffset))}
-          nextHref={
-            period.isCurrent
-              ? null
-              : periodHref(shiftPeriod(period, +1, tzOffset))
-          }
-          grainHref={(g) => periodHref(periodContaining(g, range.from, tzOffset))}
+          anchorInput={toDateInput(period.from, tzOffset)}
+          // Switching size lands on the current one of that size: tapping
+          // "Week" means this week, not the week inside whatever month was
+          // open. A specific date still comes from the picker or a tapped day.
+          grainHref={(g) => `/?grain=${g}`}
         />
       ) : null}
 
@@ -1020,6 +1042,18 @@ function monthHref(
   next.set("from", `${monthKey}-01`);
   next.set("to", `${monthKey}-${String(last).padStart(2, "0")}`);
   return `/?${next.toString()}`;
+}
+
+/** YYYY-MM-DD from the picker, read in the viewer's timezone. */
+function parseDateParam(raw: string, tz: number): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!m) return null;
+  const d = periodContaining(
+    "day",
+    new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12)),
+    tz
+  ).from;
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 /** A link to an explicit from/to range, keeping filters but dropping preset. */
