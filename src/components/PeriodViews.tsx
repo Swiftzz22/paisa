@@ -2,6 +2,7 @@ import Link from "next/link";
 import { formatINR } from "@/lib/format";
 import { MONTH_NAMES, localParts } from "@/lib/time";
 import type { Grain, Period } from "@/lib/range";
+import { DateJumpButton } from "@/components/DateJumpButton";
 
 /**
  * Ways of seeing a period without scrolling through it.
@@ -38,32 +39,22 @@ const GRAINS: Array<{ id: Grain; label: string }> = [
  */
 export function PeriodBar({
   period,
-  anchorInput,
   grainHref,
 }: {
   period: Period;
-  /** The current period's start as YYYY-MM-DD, to seed the picker. */
-  anchorInput: string;
   grainHref: (g: Grain) => string;
 }) {
   return (
     <section className="mt-3 space-y-2">
-      {/* A date rather than arrows. Stepping one period at a time is fine for
-          last month and hopeless for last March, so the label is a picker: a
-          chosen date means that day, its week, its month or its year,
-          depending on the size selected below. */}
+      {/* A calendar button rather than arrows. Stepping one period at a time
+          is fine for last month and hopeless for last March, and an exposed
+          date field read as a form to fill in — so the picker hides behind the
+          button and applies the moment a date is chosen. */}
       <form
         method="GET"
         action="/"
-        className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/40"
+        className="relative flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/40"
       >
-        <input type="hidden" name="grain" value={period.grain} />
-        <label htmlFor="jump" className="sr-only">
-          Jump to a date
-        </label>
-        <span aria-hidden className="text-zinc-400">
-          📅
-        </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
             {period.label}
@@ -73,21 +64,11 @@ export function PeriodBar({
               </span>
             ) : null}
           </span>
-          <input
-            id="jump"
-            type="date"
-            name="on"
-            defaultValue={anchorInput}
-            max={new Date().toISOString().slice(0, 10)}
-            className="mt-1 w-full bg-transparent text-xs text-zinc-500 outline-none dark:text-zinc-400"
-          />
+          <span className="block text-[11px] text-zinc-400">
+            Tap the calendar to jump to any date
+          </span>
         </span>
-        <button
-          type="submit"
-          className="min-h-[40px] shrink-0 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
-        >
-          Go
-        </button>
+        <DateJumpButton grain={period.grain} />
       </form>
 
       <nav aria-label="Period size" className="grid grid-cols-4 gap-1.5">

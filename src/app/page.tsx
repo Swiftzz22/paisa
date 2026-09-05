@@ -324,7 +324,6 @@ export default async function Home({
       {period ? (
         <PeriodBar
           period={period}
-          anchorInput={toDateInput(period.from, tzOffset)}
           // Switching size lands on the current one of that size: tapping
           // "Week" means this week, not the week inside whatever month was
           // open. A specific date still comes from the picker or a tapped day.
@@ -771,11 +770,14 @@ function FlowCell({
   tone?: "in";
 }) {
   return (
-    <div className="flex-1 px-2 text-center">
+    <div className="min-w-0 flex-1 px-1.5 text-center sm:px-2">
       <div className="text-[11px] text-zinc-500 dark:text-zinc-400">{label}</div>
+      {/* A lakh-plus figure with a sign in front is wider than a third of a
+          375pt screen, and wrapping split "− ₹1,54,938.18" across two lines.
+          Kept on one line and allowed to step down a size instead. */}
       <div
         className={
-          "mt-0.5 text-sm font-semibold tabular-nums " +
+          "mt-0.5 whitespace-nowrap text-[13px] font-semibold tabular-nums sm:text-sm " +
           (tone === "in"
             ? "text-emerald-600 dark:text-emerald-400"
             : "text-zinc-900 dark:text-zinc-50")
