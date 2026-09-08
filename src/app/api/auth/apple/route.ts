@@ -45,8 +45,12 @@ function rejectionClass(e: unknown): string {
     case "ERR_JWS_SIGNATURE_VERIFICATION_FAILED":
       return "bad signature";
     case "ERR_JWKS_TIMEOUT":
-    case "ERR_JWKS_NO_MATCHING_KEY":
       return "couldn't reach Apple's keys";
+    // Apple's keys were fetched fine; none of them signed this token. That is
+    // a forged or malformed token, not a network problem — folding the two
+    // together sent me looking at connectivity once already.
+    case "ERR_JWKS_NO_MATCHING_KEY":
+      return "not signed by Apple";
     default:
       // Our own throws (nonce, subject) carry no code, and their messages are
       // written here and contain nothing secret.
