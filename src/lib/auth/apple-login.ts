@@ -214,6 +214,9 @@ export async function checkAppleCredentials(): Promise<{
   privateKey: boolean;
   signs: boolean;
   problem?: string;
+  /** Character count only — never the value. */
+  valueLength?: number;
+  hint?: string;
 }> {
   const present = {
     teamId: Boolean(process.env.APPLE_TEAM_ID),
@@ -243,6 +246,20 @@ export async function checkAppleCredentials(): Promise<{
         : raw.includes("BEGIN")
           ? "pasted-the-pem-itself-not-base64"
           : "not-base64-of-a-p8-file";
-    return { ...present, signs: false, problem };
+    // Length alone separates the common mistakes: a base64'd .p8 runs to
+    // several hundred characters, while the Key ID and Team ID are ten. It
+    // says nothing useful about a real key — the size is fixed by the format.
+    return {
+      ...present,
+      signs: false,
+      problem,
+      valueLength: raw.length,
+      hint:
+        raw.length <= 20
+          ? "too short to be a key — this looks like a Key ID or Team ID pasted into the wrong variable"
+          : raw.length < 200
+            ? "shorter than a .p8 — the value may have been truncated when pasted"
+            : "right sort of length, but not a private key file",
+    };
   }
 }
