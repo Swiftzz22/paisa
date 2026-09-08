@@ -148,9 +148,14 @@ export async function linkAppleToUser(
   });
   if (claimed && claimed.id !== userId) {
     if (!(await isEmptyAppleShell(claimed.id))) {
+      // Say what is in the way. "Already on another account" is true and
+      // useless: the other account is usually one the same person made by
+      // signing in with Apple once, and what they need to know is that it has
+      // something in it and that deleting it is the way through.
       return {
         ok: false,
-        reason: "That Apple ID is already on another account.",
+        reason:
+          "That Apple ID already opens a different paisa account, and that account isn't empty. Sign in with Apple, check what's there, and delete that account from Settings if you don't need it — then link again.",
       };
     }
     // Free the Apple id from the empty shell so the link below can take it.

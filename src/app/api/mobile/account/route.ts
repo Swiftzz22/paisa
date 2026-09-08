@@ -16,6 +16,19 @@ const Body = z.object({
   confirmEmail: z.string().min(3).max(320),
 });
 
+/**
+ * An address this app invented, not one anybody has.
+ *
+ * Sign in with Apple through Hide My Email gives us no usable address, so the
+ * account gets a generated placeholder. Asking someone to type
+ * `apple_0004899ec30a43187a44dc91232871dd@appleid.local` to confirm a deletion
+ * is asking for something they have never seen and could not reproduce — the
+ * confirmation stops being a safeguard and becomes a locked door.
+ */
+function isPlaceholderEmail(email: string): boolean {
+  return email.toLowerCase().endsWith("@appleid.local");
+}
+
 /** Permanently delete the signed-in account. Required by App Store rules. */
 export async function DELETE(req: NextRequest) {
   const user = await getMobileUser(req.headers.get("authorization"));
@@ -30,9 +43,20 @@ export async function DELETE(req: NextRequest) {
   }
 
   const typed = parsed.data.confirmEmail.trim().toLowerCase();
-  if (typed !== user.email.toLowerCase()) {
+  const expected = user.email.toLowerCase();
+  // On a placeholder account the word DELETE is the confirmation, since there
+  // is no address to know. The real address is still accepted, so anyone who
+  // does have it — from this screen, say — is not turned away.
+  const ok = isPlaceholderEmail(expected)
+    ? typed === "delete" || typed === expected
+    : typed === expected;
+  if (!ok) {
     return Response.json(
-      { error: "That doesn't match the email on this account." },
+      {
+        error: isPlaceholderEmail(expected)
+          ? "Type DELETE to confirm."
+          : "That doesn't match the email on this account.",
+      },
       { status: 400 }
     );
   }
