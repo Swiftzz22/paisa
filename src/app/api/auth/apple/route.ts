@@ -25,6 +25,36 @@ const Body = z.object({
 });
 
 /**
+ * Reduce a verification failure to a short, safe class.
+ *
+ * `jose` sets a stable `code` on its errors, which is exactly the right level
+ * of detail: enough to tell a misconfigured audience from an expired token,
+ * while the message itself — which can quote claim values — is never returned.
+ */
+function rejectionClass(e: unknown): string {
+  const code = (e as { code?: string })?.code;
+  switch (code) {
+    case "ERR_JWT_CLAIM_VALIDATION_FAILED": {
+      const claim = (e as { claim?: string })?.claim;
+      // `aud` here means the server is checking tokens against the wrong
+      // client id, and no amount of retrying will help.
+      return claim ? `wrong ${claim}` : "claim mismatch";
+    }
+    case "ERR_JWT_EXPIRED":
+      return "token expired";
+    case "ERR_JWS_SIGNATURE_VERIFICATION_FAILED":
+      return "bad signature";
+    case "ERR_JWKS_TIMEOUT":
+    case "ERR_JWKS_NO_MATCHING_KEY":
+      return "couldn't reach Apple's keys";
+    default:
+      // Our own throws (nonce, subject) carry no code, and their messages are
+      // written here and contain nothing secret.
+      return code ?? (e as Error)?.message ?? "unknown";
+  }
+}
+
+/**
  * POST /api/auth/apple — sign in with Apple from the app.
  *
  * Verifies the identity token against Apple's keys, consumes the nonce this
@@ -54,7 +84,14 @@ export async function POST(req: NextRequest) {
     identity = await verifyAppleIdentityToken(identityToken, nonce);
   } catch (e) {
     console.error("[apple sign-in] token rejected:", e);
-    return Response.json({ error: "Apple sign-in failed." }, { status: 401 });
+    // A bare "failed" here is unchaseable from a TestFlight build, and the
+    // causes need completely different fixes: a wrong APPLE_CLIENT_ID rejects
+    // every token forever, while a stale one just needs another go. Report the
+    // class of rejection — never the token, the claims, or the nonce.
+    return Response.json(
+      { error: `Apple sign-in failed: ${rejectionClass(e)}` },
+      { status: 401 }
+    );
   }
 
   // Best effort: without Apple server credentials there is no refresh token,

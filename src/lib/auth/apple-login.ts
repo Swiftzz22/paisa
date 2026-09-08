@@ -240,6 +240,14 @@ export async function checkAppleCredentials(): Promise<{
   keyId: boolean;
   privateKey: boolean;
   signs: boolean;
+  /**
+   * Whether the audience tokens are checked against is the app's bundle id.
+   * A wrong APPLE_CLIENT_ID — a Services ID, say, which is what the web flow
+   * would want — rejects every identity token with no clue as to why, and is
+   * invisible to the signing check above because minting a client secret never
+   * consults the audience.
+   */
+  clientIdIsBundleId: boolean;
   problem?: string;
   /** Character count only — never the value. */
   valueLength?: number;
@@ -249,6 +257,7 @@ export async function checkAppleCredentials(): Promise<{
     teamId: Boolean(process.env.APPLE_TEAM_ID),
     keyId: Boolean(process.env.APPLE_KEY_ID),
     privateKey: Boolean(process.env.APPLE_PRIVATE_KEY_B64),
+    clientIdIsBundleId: clientId() === "com.saniakothari.paisa",
   };
   if (!present.teamId || !present.keyId || !present.privateKey) {
     return { ...present, signs: false, problem: "missing" };
