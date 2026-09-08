@@ -65,7 +65,13 @@ export async function verifyAppleIdentityToken(
     audience: clientId(),
     // Pinned explicitly: leaving the algorithm open is the classic
     // algorithm-confusion hole.
-    algorithms: ["ES256"],
+    //
+    // RS256, not ES256 — the two algorithms in this file run in opposite
+    // directions and pinning the wrong one here rejected every sign-in with
+    // ERR_JOSE_ALG_NOT_ALLOWED. Apple signs identity tokens with the RSA keys
+    // it publishes at /auth/keys; ES256 is what *we* sign the client secret
+    // with, because the .p8 is an EC key.
+    algorithms: ["RS256"],
     clockTolerance: 30,
     maxTokenAge: "10 minutes",
   });
