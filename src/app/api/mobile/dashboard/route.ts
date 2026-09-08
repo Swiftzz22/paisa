@@ -73,8 +73,19 @@ export async function GET(req: NextRequest) {
     select: { accountEmail: true },
   });
 
+  // Whether Sign in with Apple already opens this account. Settings needs it to
+  // say "linked" rather than offering the link again to someone who has it.
+  const account = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { appleSub: true },
+  });
+
   return Response.json({
-    user: { name: user.name, email: user.email },
+    user: {
+      name: user.name,
+      email: user.email,
+      appleLinked: Boolean(account?.appleSub),
+    },
     emailConnected: emailAccounts.length > 0,
     connectedEmails: emailAccounts.map((a) => a.accountEmail),
     monthLabel: budget.monthLabel,

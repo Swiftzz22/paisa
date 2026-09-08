@@ -105,6 +105,38 @@ export async function resolveUserForAppleLogin(
  * existing account before the Apple identity is joined to it, so there is no
  * path for a stranger holding a matching email to take it over.
  */
+/**
+ * Whether an account is nothing but the shell a first Apple sign-in left behind.
+ *
+ * Signing in with Apple before linking creates a fresh account, by design — but
+ * that account then holds the Apple id, and linking the same Apple id to the
+ * real account would be refused for the rest of time. Someone who tried Apple
+ * sign-in once would be permanently unable to link it, which is a trap.
+ *
+ * Absorbing it is only safe when there is demonstrably nothing to lose: no
+ * transactions, no other way to sign in, and no imports. Anything else is a
+ * real account that happens to be small, and is never touched.
+ */
+async function isEmptyAppleShell(userId: string): Promise<boolean> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { googleSub: true },
+  });
+  if (!user) return false;
+  // Another sign-in method means someone can still get in here. Not a shell.
+  if (user.googleSub) return false;
+
+  const [txns, imports, passkeys, emailAccounts] = await Promise.all([
+    prisma.transaction.count({ where: { userId } }),
+    prisma.importBatch.count({ where: { userId } }),
+    // A passkey is a sign-in method, and an email account is a live connection
+    // someone set up — either makes this a real account, not a leftover.
+    prisma.passkey.count({ where: { userId } }),
+    prisma.emailAccount.count({ where: { userId } }),
+  ]);
+  return txns === 0 && imports === 0 && passkeys === 0 && emailAccounts === 0;
+}
+
 export async function linkAppleToUser(
   userId: string,
   identity: AppleIdentity,
@@ -115,7 +147,16 @@ export async function linkAppleToUser(
     select: { id: true },
   });
   if (claimed && claimed.id !== userId) {
-    return { ok: false, reason: "That Apple ID is already on another account." };
+    if (!(await isEmptyAppleShell(claimed.id))) {
+      return {
+        ok: false,
+        reason: "That Apple ID is already on another account.",
+      };
+    }
+    // Free the Apple id from the empty shell so the link below can take it.
+    // Deleted rather than just cleared: an account with no sign-in method and
+    // nothing in it is unreachable, and leaving it behind serves nobody.
+    await prisma.user.delete({ where: { id: claimed.id } });
   }
   await prisma.user.update({
     where: { id: userId },

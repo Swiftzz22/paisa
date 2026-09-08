@@ -42,7 +42,12 @@ export function buildLoginUrl(state: string): string {
     access_type: "online",
     scope: LOGIN_SCOPES,
     state,
-    include_granted_scopes: true,
+    // Deliberately NOT include_granted_scopes. Incremental authorization folds
+    // everything this client was ever granted into the request, so for anyone
+    // who had connected Gmail the login carried gmail.readonly along with it —
+    // a restricted scope, which is what put the "Google hasn't verified this
+    // app" screen in front of a plain sign-in. Login only ever needs identity,
+    // and keeping the scopes apart is the entire point of this file.
   });
 }
 

@@ -111,8 +111,15 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { id } = await resolveUserForAppleLogin(identity, fullName, refreshToken);
-    return Response.json({ token: await createMobileToken(id) });
+    const { id, isNew } = await resolveUserForAppleLogin(
+      identity,
+      fullName,
+      refreshToken
+    );
+    // Told to the app so it can say so. A first Apple sign-in always makes a
+    // fresh account, and landing in an empty one with no explanation reads as
+    // the app having lost everything.
+    return Response.json({ token: await createMobileToken(id), isNew });
   } catch (e) {
     console.error("[apple sign-in] user resolution failed:", e);
     return Response.json({ error: "Couldn't sign you in." }, { status: 500 });
