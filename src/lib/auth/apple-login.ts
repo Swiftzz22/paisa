@@ -91,6 +91,23 @@ export async function verifyAppleIdentityToken(
   };
 }
 
+/**
+ * The .p8 as a PEM, however it was pasted into the environment.
+ *
+ * Base64 is the documented form, because a PEM's newlines do not survive most
+ * environment-variable editors. But pasting the file's contents directly is the
+ * obvious thing to try, and a base64 tool that wraps its output at 64 columns
+ * is equally easy to reach for — both produced a key that silently failed to
+ * parse. All three shapes are accepted now.
+ */
+function applePem(raw: string): string {
+  const trimmed = raw.trim();
+  // Already a PEM: someone pasted the file rather than base64 of it.
+  if (trimmed.includes("BEGIN PRIVATE KEY")) return trimmed;
+  // Base64, possibly wrapped across lines by the tool that produced it.
+  return Buffer.from(trimmed.replace(/\s+/g, ""), "base64").toString("utf8");
+}
+
 /** True when every credential needed for Apple's server endpoints is present. */
 export function isAppleServerConfigured(): boolean {
   return Boolean(
@@ -114,8 +131,7 @@ async function clientSecret(): Promise<string> {
   if (!teamId || !keyId || !keyB64) {
     throw new Error("Apple server credentials are not configured.");
   }
-  // Base64 so the PEM's newlines survive being an environment variable.
-  const pem = Buffer.from(keyB64, "base64").toString("utf8");
+  const pem = applePem(keyB64);
   const key = await importPKCS8(pem, "ES256");
 
   return new SignJWT({})
@@ -210,14 +226,23 @@ export async function checkAppleCredentials(): Promise<{
   try {
     await clientSecret();
     return { ...present, signs: true };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "";
-    // Deliberately coarse: enough to act on, never the key itself.
-    const problem = /base64|decode/i.test(msg)
-      ? "not-valid-base64"
-      : /PKCS8|pem|key|asn1|decrypt/i.test(msg)
-        ? "not-a-valid-p8-key"
-        : "could-not-sign";
+  } catch {
+    // Report the shape of what is there, not its content — enough to say which
+    // paste went wrong without echoing any of the key.
+    const raw = (process.env.APPLE_PRIVATE_KEY_B64 ?? "").trim();
+    let decoded = "";
+    try {
+      decoded = Buffer.from(raw.replace(/\s+/g, ""), "base64").toString("utf8");
+    } catch {
+      /* handled below */
+    }
+    const problem = decoded.includes("BEGIN PRIVATE KEY")
+      ? "key-decodes-but-apple-rejected-it"
+      : decoded.includes("BEGIN")
+        ? "wrong-key-type-expected-a-p8-private-key"
+        : raw.includes("BEGIN")
+          ? "pasted-the-pem-itself-not-base64"
+          : "not-base64-of-a-p8-file";
     return { ...present, signs: false, problem };
   }
 }
