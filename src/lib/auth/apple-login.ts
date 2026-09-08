@@ -180,3 +180,44 @@ export async function revokeAppleToken(refreshToken: string): Promise<void> {
     }),
   });
 }
+
+/**
+ * Check the Apple server credentials without revealing them.
+ *
+ * The private key is only exercised when someone signs in or deletes their
+ * account, so a bad value — truncated base64, the wrong key, a stray newline —
+ * stays invisible until it breaks one of those. This mints a client secret and
+ * throws the result away, which proves the key decodes and signs.
+ *
+ * Reports presence and success only. No values, and errors are reduced to a
+ * short class so nothing about the key can leak through a message.
+ */
+export async function checkAppleCredentials(): Promise<{
+  teamId: boolean;
+  keyId: boolean;
+  privateKey: boolean;
+  signs: boolean;
+  problem?: string;
+}> {
+  const present = {
+    teamId: Boolean(process.env.APPLE_TEAM_ID),
+    keyId: Boolean(process.env.APPLE_KEY_ID),
+    privateKey: Boolean(process.env.APPLE_PRIVATE_KEY_B64),
+  };
+  if (!present.teamId || !present.keyId || !present.privateKey) {
+    return { ...present, signs: false, problem: "missing" };
+  }
+  try {
+    await clientSecret();
+    return { ...present, signs: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    // Deliberately coarse: enough to act on, never the key itself.
+    const problem = /base64|decode/i.test(msg)
+      ? "not-valid-base64"
+      : /PKCS8|pem|key|asn1|decrypt/i.test(msg)
+        ? "not-a-valid-p8-key"
+        : "could-not-sign";
+    return { ...present, signs: false, problem };
+  }
+}
