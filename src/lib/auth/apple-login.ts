@@ -102,11 +102,38 @@ export async function verifyAppleIdentityToken(
  */
 function applePem(raw: string): string {
   const trimmed = raw.trim();
-  // Already a PEM: someone pasted the file rather than base64 of it.
+
+  // Already a PEM: the file's contents pasted straight in.
   if (trimmed.includes("BEGIN PRIVATE KEY")) return trimmed;
-  // Base64, possibly wrapped across lines by the tool that produced it.
-  return Buffer.from(trimmed.replace(/\s+/g, ""), "base64").toString("utf8");
+
+  const compact = trimmed.replace(/\s+/g, "");
+
+  // Base64 of the whole file — the documented form. Possibly wrapped at 64
+  // columns by whichever tool produced it, hence stripping whitespace first.
+  let decoded = "";
+  try {
+    decoded = Buffer.from(compact, "base64").toString("utf8");
+  } catch {
+    /* fall through to the bare-body case */
+  }
+  if (decoded.includes("BEGIN PRIVATE KEY")) return decoded;
+
+  // Just the base64 between the header and footer, with the headers left
+  // behind. Opening the .p8 and copying the block in the middle is the natural
+  // thing to do, and it is still the key — so put the envelope back rather
+  // than rejecting it.
+  const lines = [
+    "-----BEGIN PRIVATE KEY-----",
+    ...(compact.match(/.{1,64}/g) ?? []),
+    "-----END PRIVATE KEY-----",
+    "",
+  ];
+  return lines.join(NEWLINE);
 }
+
+/** A PEM's line separator, kept out of the literal above so no editor or
+ *  line-ending conversion can turn it into a real break. */
+const NEWLINE = String.fromCharCode(10);
 
 /** True when every credential needed for Apple's server endpoints is present. */
 export function isAppleServerConfigured(): boolean {
