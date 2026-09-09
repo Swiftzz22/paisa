@@ -87,13 +87,13 @@ export async function POST(req: NextRequest) {
   try {
     identity = await verifyAppleIdentityToken(identityToken, nonce);
   } catch (e) {
-    console.error("[apple sign-in] token rejected:", e);
-    // A bare "failed" here is unchaseable from a TestFlight build, and the
-    // causes need completely different fixes: a wrong APPLE_CLIENT_ID rejects
-    // every token forever, while a stale one just needs another go. Report the
-    // class of rejection — never the token, the claims, or the nonce.
+    // The class goes to the log, where it earned its keep — it is how the
+    // RS256 mistake was found. It does not go to the person signing in, who
+    // can do nothing with "wrong aud" and should not be shown it. Never the
+    // token, the claims, or the nonce, in either direction.
+    console.error("[apple sign-in] token rejected:", rejectionClass(e), e);
     return Response.json(
-      { error: `Apple sign-in failed: ${rejectionClass(e)}` },
+      { error: "Apple couldn't verify that sign-in. Please try again." },
       { status: 401 }
     );
   }
