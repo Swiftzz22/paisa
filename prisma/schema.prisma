@@ -34,6 +34,13 @@ model User {
   // Gmail access at all. Nullable so existing rows need no backfill; one is
   // minted the first time the address is asked for.
   inboundKey String? @unique
+  // UNUSED. Groundwork for a subscription that was started and then dropped in
+  // favour of a tip jar, which gates nothing and needs no server at all. The
+  // columns exist in both databases already, so they are declared here to keep
+  // the schema matching what is actually there rather than adding to the drift
+  // this project already has. Nothing reads or writes them.
+  plusUntil DateTime?
+  billingCustomerId String? @unique
   createdAt DateTime @default(now())
 
   transactions        Transaction[]
@@ -48,6 +55,26 @@ model User {
   sessions            Session[]
   passkeys            Passkey[]
   mobileAuthCodes     MobileAuthCode[]
+  usageCounters       UsageCounter[]
+}
+
+/// UNUSED, and empty. Left declared for the same reason as User.plusUntil: the
+/// table exists in both databases, and a schema that omits it would be a lie
+/// about what is there. Delete both together if the paywall is ruled out for
+/// good; keep them if it is only deferred.
+model UsageCounter {
+  id     String @id @default(uuid())
+  userId String
+  /// YYYY-MM
+  month  String
+  /// 'import' | 'ask'
+  kind   String
+  used   Int    @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, month, kind])
+  @@index([userId])
 }
 
 /// Short-lived one-time code handed to the app after a browser sign-in.
