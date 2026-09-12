@@ -16,6 +16,22 @@ import { prisma } from "@/lib/prisma";
  * check sits next to the spend rather than next to the UI.
  */
 
+/**
+ * Master switch. Off unless PAYWALL_ENABLED is exactly "true".
+ *
+ * The guards went live before the app had any way to buy anything, which would
+ * have met an App Review tester as a feature that simply refuses — there is no
+ * purchase path in a build that predates the paywall screen. Gating on an
+ * environment variable means the server and the app can ship in either order,
+ * and the switch is thrown once a build exists that can actually take money.
+ *
+ * Defaulting to off is deliberate: forgetting to set it leaves everything
+ * working for everyone, which is the failure worth having.
+ */
+export function paywallEnabled(): boolean {
+  return process.env.PAYWALL_ENABLED === "true";
+}
+
 /** What a free account gets each calendar month. */
 export const FREE_ALLOWANCE = {
   /** One is enough to prove the app works on someone's own statement. */
@@ -28,6 +44,9 @@ export type MeteredKind = keyof typeof FREE_ALLOWANCE;
 
 /** True while paisa. plus is live — including a cancelled-but-paid-for period. */
 export async function isPlus(userId: string): Promise<boolean> {
+  // With the paywall off, everyone is treated as paying — which is what makes
+  // every guard in the app inert in one place rather than eighteen.
+  if (!paywallEnabled()) return true;
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { plusUntil: true },
