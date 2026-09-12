@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getMobileUser } from "@/lib/auth/mobile";
 import { importUniversalStatement } from "@/lib/statement-import";
+import { checkAllowance, consume, paywallResponse } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -48,12 +49,20 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "That file is over 10 MB." }, { status: 400 });
   }
 
+  // Metered: reading a statement is a model pass over the whole file. Checked
+  // last, after the cheap validation, so someone who uploaded a .docx is told
+  // that rather than being charged an allowance for it.
+  const tz = Number(new URL(req.url).searchParams.get("tzOffset") ?? 0);
+  const allowance = await checkAllowance(user.id, "import", tz);
+  if (!allowance.allowed) return paywallResponse(allowance, "statement imports");
+
   try {
     const result = await importUniversalStatement({
       userId: user.id,
       fileBuffer: Buffer.from(await file.arrayBuffer()),
       filename,
     });
+    await consume(user.id, "import", tz);
     return Response.json({
       ok: true,
       added: result.inserted,

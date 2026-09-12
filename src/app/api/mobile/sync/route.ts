@@ -3,6 +3,7 @@ import { getMobileUser } from "@/lib/auth/mobile";
 import { runSyncForUser, getLastSyncRun, TICK_BUDGET_MS } from "@/lib/sync";
 import { reconcileTransactionDates } from "@/lib/reconcile-dates";
 import { checkSyncRate } from "@/lib/agent/rate-limit";
+import { isPlus, plusOnlyResponse } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -23,6 +24,13 @@ const inFlight = new Set<string>();
 export async function POST(req: NextRequest) {
   const user = await getMobileUser(req.headers.get("authorization"));
   if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  // Plus only, and not metered: a mailbox sync runs on a schedule forever, so
+  // there is no sensible "three free ones" — an allowance would just mean the
+  // feature stops working mid-month with no way to tell it apart from a bug.
+  if (!(await isPlus(user.id))) {
+    return plusOnlyResponse("Automatic email sync");
+  }
 
   // Each call costs a Gmail fetch plus an LLM batch, and the shared model quota
   // is the scarce resource — one account hammering this degrades everyone.

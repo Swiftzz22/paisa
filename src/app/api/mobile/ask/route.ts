@@ -4,6 +4,7 @@ import { getMobileUser } from "@/lib/auth/mobile";
 import { runAgentLoop, type ChatMessage } from "@/lib/agent/loop";
 import { GeminiRateLimitError } from "@/lib/email/parser";
 import { checkAndRecord } from "@/lib/agent/rate-limit";
+import { checkAllowance, consume, paywallResponse } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -41,6 +42,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Metered: every answer is a model call. Checked before the work and only
+  // consumed after it succeeds, so a failed answer costs nobody an allowance.
+  const tz = Number(new URL(req.url).searchParams.get("tzOffset") ?? 0);
+  const allowance = await checkAllowance(user.id, "ask", tz);
+  if (!allowance.allowed) return paywallResponse(allowance, "questions");
+
   const history: ChatMessage[] = (parsed.data.history ?? []).map((m) => ({
     role: m.role,
     content: m.content,
@@ -52,6 +59,7 @@ export async function POST(req: NextRequest) {
       history,
       userMessage: parsed.data.message,
     });
+    await consume(user.id, "ask", tz);
     return Response.json({ answer: result.answer });
   } catch (e) {
     if (e instanceof GeminiRateLimitError) {

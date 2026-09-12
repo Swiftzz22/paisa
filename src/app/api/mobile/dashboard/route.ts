@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
   // say "linked" rather than offering the link again to someone who has it.
   const account = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { appleSub: true },
+    select: { appleSub: true, plusUntil: true },
   });
 
   return Response.json({
@@ -85,6 +85,12 @@ export async function GET(req: NextRequest) {
       name: user.name,
       email: user.email,
       appleLinked: Boolean(account?.appleSub),
+      // So Settings and the paywall sheet can show the right state without a
+      // second request. Derived here rather than sent as a date, because the
+      // app has no business interpreting an expiry.
+      plus: Boolean(
+        account?.plusUntil && account.plusUntil.getTime() > Date.now()
+      ),
     },
     emailConnected: emailAccounts.length > 0,
     connectedEmails: emailAccounts.map((a) => a.accountEmail),
