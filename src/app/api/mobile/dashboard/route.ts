@@ -82,6 +82,10 @@ export async function GET(req: NextRequest) {
 
   return Response.json({
     user: {
+      // The app identifies itself to RevenueCat with this, so a purchase
+      // webhook can find the row. It is the person's own id and their token
+      // already implies it, so nothing is revealed by returning it.
+      id: user.id,
       name: user.name,
       email: user.email,
       appleLinked: Boolean(account?.appleSub),
