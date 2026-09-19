@@ -6,7 +6,7 @@ export const metadata = {
     "The agreement between you and paisa.: what the app does, what it does not promise, and how either side can end it.",
 };
 
-const UPDATED = "1 September 2026";
+const UPDATED = "19 September 2026";
 
 /**
  * Terms of Use.
@@ -123,14 +123,43 @@ export default function TermsOfUse() {
           </p>
         </Section>
 
-        <Section title="Cost">
+        <Section title="Cost and subscriptions">
           <p>
-            paisa. is currently free to use. If paid features are ever
-            introduced, the price and terms will be shown before you are charged,
-            and anything you already have will not start costing money without
-            your agreement. Purchases made through the App Store are handled by
-            Apple under Apple&rsquo;s terms, including refunds.
+            paisa. is free to download and use. Tracking, charts, budgets,
+            categories, history and the Face ID lock cost nothing and stay that
+            way.
           </p>
+          <p className="mt-3">
+            <strong>paisa. plus</strong> is an optional auto-renewing
+            subscription, offered monthly or yearly, that adds automatic sync from
+            your bank emails, unlimited statement imports and unlimited questions
+            in Ask. The price and length are shown in the app before you buy, in
+            your local currency.
+          </p>
+          <ul className="mt-3 list-disc space-y-1.5 pl-5">
+            <li>Payment is charged to your Apple ID when you confirm the purchase.</li>
+            <li>
+              The subscription renews automatically at the same price for the same
+              length unless you cancel at least 24 hours before the end of the
+              current period. Your Apple ID is charged for the renewal within the
+              24 hours before that period ends.
+            </li>
+            <li>
+              You can manage or cancel it at any time in your iPhone&rsquo;s
+              Settings, under your name, then Subscriptions. Cancelling stops the
+              next renewal; you keep plus until the end of the period you have
+              already paid for.
+            </li>
+            <li>
+              Purchases are processed by Apple, and refunds are handled by Apple
+              under its own terms.
+            </li>
+            <li>
+              If plus ends, nothing you already have is taken away. Your
+              transactions and history stay available; only the automatic features
+              stop.
+            </li>
+          </ul>
         </Section>
 
         <Section title="Ending it">
