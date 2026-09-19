@@ -48,3 +48,6 @@ next-env.d.ts
 
 # Throwaway verification scripts — never committed.
 scripts/tmp-*.ts
+
+.vercel
+.env*
