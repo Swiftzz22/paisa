@@ -1,6 +1,7 @@
 import "server-only";
 import { GoogleGenAI, Type } from "@google/genai";
-import { PDFDocument } from "pdf-lib";
+import { PDFDict, PDFDocument, PDFName, PDFRawStream, PDFRef } from "pdf-lib";
+import { deflateSync } from "node:zlib";
 import * as XLSX from "xlsx";
 import {
   callGeminiWithBackoff,
@@ -171,12 +172,94 @@ const RESPONSE_SCHEMA = {
   required: ["transactions"],
 };
 
+/** A 1×1 white pixel, standing in for an image we don't want to send. */
+function blankImage(context: PDFDocument["context"]): PDFRawStream {
+  const data = deflateSync(Buffer.from([0xff]));
+  return PDFRawStream.of(
+    context.obj({
+      Type: "XObject",
+      Subtype: "Image",
+      Width: 1,
+      Height: 1,
+      ColorSpace: "DeviceGray",
+      BitsPerComponent: 8,
+      Filter: "FlateDecode",
+      Length: data.length,
+    }),
+    data
+  );
+}
+
+/** Every image XObject reachable from a page, following Form XObjects. */
+function imagesOnPage(
+  context: PDFDocument["context"],
+  resources: PDFDict | undefined,
+  found: Map<string, PDFRef>,
+  depth = 0
+): void {
+  if (!resources || depth > 4) return;
+  const xobjects = resources.lookup(PDFName.of("XObject"));
+  if (!(xobjects instanceof PDFDict)) return;
+  for (const [, ref] of xobjects.entries()) {
+    if (!(ref instanceof PDFRef)) continue;
+    const stream = context.lookup(ref);
+    if (!(stream instanceof PDFRawStream)) continue;
+    const subtype = stream.dict.get(PDFName.of("Subtype"))?.toString();
+    if (subtype === "/Image") found.set(ref.tag, ref);
+    else if (subtype === "/Form") {
+      imagesOnPage(
+        context,
+        stream.dict.lookup(PDFName.of("Resources")) as PDFDict | undefined,
+        found,
+        depth + 1
+      );
+    }
+  }
+}
+
+/** Below this, an image isn't costing enough to be worth removing. */
+const TEMPLATE_MIN_BYTES = 50_000;
+
 /**
- * One page of a PDF, as its own PDF.
+ * Blank out the pre-printed background a statement is laid on.
  *
- * pdf-lib copies the page object and the resources it references, so a scanned
- * page keeps its image and nothing is re-encoded — a 9-page, 771KB statement
- * becomes nine ~85KB files in well under a second.
+ * A bank's PDF is usually its empty letterhead as one big image, with the real
+ * numbers drawn on top. HSBC's is a 611KB JPEG of the form — logo, marketing
+ * copy, empty boxes — referenced by all nine pages. It holds no transaction:
+ * it cannot, being identical on every page. Sent as-is it was 92% of each
+ * request and gave the model a page of advertising to read past.
+ *
+ * Only an image every page shares is touched, which is what makes it safe —
+ * anything carrying a page's own content cannot be on all of them.
+ *
+ * Returns the bytes removed, for the log.
+ */
+function stripSharedBackground(doc: PDFDocument): number {
+  const context = doc.context;
+  const pageCount = doc.getPageCount();
+  if (pageCount < 2) return 0;
+
+  const perPage: Array<Map<string, PDFRef>> = [];
+  for (let i = 0; i < pageCount; i++) {
+    const found = new Map<string, PDFRef>();
+    imagesOnPage(context, doc.getPage(i).node.Resources(), found);
+    perPage.push(found);
+  }
+
+  let removed = 0;
+  for (const [tag, ref] of perPage[0]) {
+    if (!perPage.every((p) => p.has(tag))) continue;
+    const stream = context.lookup(ref);
+    if (!(stream instanceof PDFRawStream)) continue;
+    if (stream.contents.length < TEMPLATE_MIN_BYTES) continue;
+    removed += stream.contents.length;
+    context.assign(ref, blankImage(context));
+  }
+  return removed;
+}
+
+/**
+ * One page of a PDF, as its own PDF, with the shared background dropped.
  *
  * Returns [] when the file cannot be split (encrypted, malformed, or a single
  * page), which is the signal to send it whole.
@@ -188,6 +271,12 @@ async function splitPdfPages(buffer: Buffer): Promise<Buffer[]> {
     });
     const count = src.getPageCount();
     if (count < 2) return [];
+
+    const stripped = stripSharedBackground(src);
+    if (stripped > 0) {
+      console.log(`[parse] dropped ${Math.round(stripped / 1024)}KB of shared background`);
+    }
+
     const out: Buffer[] = [];
     for (let i = 0; i < count; i++) {
       const one = await PDFDocument.create();
@@ -264,10 +353,11 @@ async function readWithVision(
  * How many pages are read at once.
  *
  * The number of requests is the page count either way, so this does not change
- * how much quota a statement costs — only how long it takes. Five covers a
- * typical nine-page statement in two passes.
+ * how much quota a statement costs — only how long it takes. Once the shared
+ * background is gone each request is tens of kilobytes, so a normal statement
+ * goes out in a single wave and finishes in about the time one page takes.
  */
-const PAGE_CONCURRENCY = 5;
+const PAGE_CONCURRENCY = 10;
 
 /**
  * Read a scanned PDF page by page, in parallel.
@@ -296,7 +386,9 @@ async function readPdfByPage(
       {
         text:
           prompt +
-          `\n\nThis is page ${i + 1} of ${pages.length} of the statement. Extract the transaction rows on this page only. If the page carries no transactions (a cover page, terms, or a summary), return an empty list.`,
+          `\n\nThis is page ${i + 1} of ${pages.length} of the statement. Extract the transaction rows on this page only. If the page carries no transactions (a cover page, terms, or a summary), return an empty list.
+
+The bank's pre-printed background has been removed, so you are seeing the values without the form around them. Column headings may therefore be missing: read the columns left to right as date, then transaction details, then amount. A trailing "CR" against an amount means money in.`,
       },
     ];
     try {
