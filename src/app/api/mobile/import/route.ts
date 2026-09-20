@@ -87,6 +87,10 @@ export async function POST(req: NextRequest) {
       duplicates: result.skippedByRef + result.skippedByFuzzy,
       failed: result.failed,
       rows: result.totalRows,
+      // A scanned statement is read a page at a time, and a page can fail
+      // without the rest of it failing. Saying which pages were missed is the
+      // difference between a partial import and a wrong one.
+      warnings: result.warnings ?? [],
     });
   } catch (e) {
     // Ran out of time waiting on the model — usually Gemini rate-limiting us.

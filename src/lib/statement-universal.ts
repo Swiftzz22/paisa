@@ -1,5 +1,6 @@
 import "server-only";
 import { GoogleGenAI, Type } from "@google/genai";
+import { PDFDocument } from "pdf-lib";
 import * as XLSX from "xlsx";
 import {
   callGeminiWithBackoff,
@@ -147,6 +148,190 @@ async function pdfToText(buffer: Buffer): Promise<string> {
 /** Enough extracted characters to believe the PDF has a real text layer. */
 const MIN_PDF_TEXT = 200;
 
+type ParsedStatement = {
+  bank_name?: string | null;
+  transactions: Array<{
+    date: string;
+    merchant: string;
+    amount_inr: number;
+    kind: "debit" | "credit";
+    payment_mode: "upi" | "card" | "cash" | "bank_transfer";
+    reference?: string | null;
+    narration?: string;
+    category_label?: string | null;
+  }>;
+};
+
+const RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    bank_name: { type: Type.STRING, nullable: true },
+    transactions: { type: Type.ARRAY, items: ITEM_SCHEMA },
+  },
+  required: ["transactions"],
+};
+
+/**
+ * One page of a PDF, as its own PDF.
+ *
+ * pdf-lib copies the page object and the resources it references, so a scanned
+ * page keeps its image and nothing is re-encoded — a 9-page, 771KB statement
+ * becomes nine ~85KB files in well under a second.
+ *
+ * Returns [] when the file cannot be split (encrypted, malformed, or a single
+ * page), which is the signal to send it whole.
+ */
+async function splitPdfPages(buffer: Buffer): Promise<Buffer[]> {
+  try {
+    const src = await PDFDocument.load(new Uint8Array(buffer), {
+      ignoreEncryption: true,
+    });
+    const count = src.getPageCount();
+    if (count < 2) return [];
+    const out: Buffer[] = [];
+    for (let i = 0; i < count; i++) {
+      const one = await PDFDocument.create();
+      const [page] = await one.copyPages(src, [i]);
+      one.addPage(page);
+      out.push(Buffer.from(await one.save()));
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Run `fn` over every item, `limit` at a time.
+ *
+ * The limit is not politeness — it is what keeps a burst of pages from being
+ * rate-limited all at once, which would cost more time in backoff than the
+ * parallelism saved.
+ */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/** One vision request: a PDF (or nothing) plus the prompt, answered as JSON. */
+async function readWithVision(
+  ai: GoogleGenAI,
+  parts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }>,
+  deadline?: number
+): Promise<ParsedStatement> {
+  const response = await withTimeout(
+    callGeminiWithBackoff(
+      () =>
+        ai.models.generateContent({
+          model: MODEL,
+          contents: [{ role: "user", parts }],
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: RESPONSE_SCHEMA,
+            temperature: 0,
+            // Nothing to deliberate about: read the rows, fill the schema.
+            thinkingConfig: { thinkingBudget: 0 },
+          },
+        }),
+      {
+        deadline,
+        // Pages run side by side on purpose; the spacing meant for the email
+        // sync loop would put them back in single file.
+        minIntervalMs: 0,
+      }
+    ),
+    deadline
+  );
+  const out = response.text;
+  if (!out) throw new Error("The model returned no content.");
+  return JSON.parse(out) as ParsedStatement;
+}
+
+/**
+ * How many pages are read at once.
+ *
+ * The number of requests is the page count either way, so this does not change
+ * how much quota a statement costs — only how long it takes. Five covers a
+ * typical nine-page statement in two passes.
+ */
+const PAGE_CONCURRENCY = 5;
+
+/**
+ * Read a scanned PDF page by page, in parallel.
+ *
+ * A statement with no text layer has to go to a vision model, and sending the
+ * whole file as one request makes the model read nine pages end to end inside
+ * a single answer — comfortably past the 60 seconds the function is allowed.
+ * Split into pages, the same work runs several at a time and each request
+ * carries a fraction of the bytes.
+ *
+ * A page that fails does not fail the import. Whatever was read is kept and
+ * the missing pages are named, because most of a statement is worth far more
+ * than a retry that will be just as slow.
+ */
+async function readPdfByPage(
+  ai: GoogleGenAI,
+  pages: Buffer[],
+  prompt: string,
+  warnings: string[],
+  deadline?: number
+): Promise<ParsedStatement> {
+  const startedAt = Date.now();
+  const results = await mapLimit(pages, PAGE_CONCURRENCY, async (page, i) => {
+    const parts = [
+      { inlineData: { data: page.toString("base64"), mimeType: "application/pdf" } },
+      {
+        text:
+          prompt +
+          `\n\nThis is page ${i + 1} of ${pages.length} of the statement. Extract the transaction rows on this page only. If the page carries no transactions (a cover page, terms, or a summary), return an empty list.`,
+      },
+    ];
+    try {
+      return await readWithVision(ai, parts, deadline);
+    } catch (e) {
+      console.error(`[parse] page ${i + 1} failed:`, e);
+      return null;
+    }
+  });
+
+  const read = results.filter((r): r is ParsedStatement => r !== null);
+  console.log(
+    `[parse] read ${read.length}/${pages.length} pages in ${Date.now() - startedAt}ms`
+  );
+
+  if (read.length === 0) {
+    throw new OutOfTimeError();
+  }
+  const missing = results
+    .map((r, i) => (r === null ? i + 1 : 0))
+    .filter((n) => n > 0);
+  if (missing.length > 0) {
+    warnings.push(
+      `Couldn't read ${missing.length === 1 ? "page" : "pages"} ${missing.join(", ")} of ${pages.length}. Everything else was imported — re-upload to try those pages again.`
+    );
+  }
+
+  return {
+    bank_name: read.find((r) => r.bank_name)?.bank_name ?? null,
+    transactions: read.flatMap((r) =>
+      Array.isArray(r.transactions) ? r.transactions : []
+    ),
+  };
+}
+
 /**
  * Reject once the deadline passes, whatever the request is doing.
  *
@@ -232,20 +417,6 @@ export async function parseStatementFile(params: {
     );
   }
 
-  type ParsedStatement = {
-    bank_name?: string | null;
-    transactions: Array<{
-      date: string;
-      merchant: string;
-      amount_inr: number;
-      kind: "debit" | "credit";
-      payment_mode: "upi" | "card" | "cash" | "bank_transfer";
-      reference?: string | null;
-      narration?: string;
-      category_label?: string | null;
-    }>;
-  };
-
   // A scanned statement has no text layer, so there is nothing for a text
   // model to read. Only those need the vision path.
   const hasText = kind === "pdf" ? text.length >= MIN_PDF_TEXT : text.length > 0;
@@ -271,56 +442,43 @@ export async function parseStatementFile(params: {
   }
 
   if (!parsed) {
-    const parts: Array<
-      { text: string } | { inlineData: { data: string; mimeType: string } }
-    > = [];
     if (kind === "pdf") {
-      parts.push({
-        inlineData: {
-          data: params.buffer.toString("base64"),
-          mimeType: "application/pdf",
-        },
-      });
-      parts.push({ text: prompt });
-    } else {
-      parts.push({
-        text: prompt + String.fromCharCode(10) + String.fromCharCode(10) + "STATEMENT CONTENT:" + String.fromCharCode(10) + text,
-      });
-    }
-
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        bank_name: { type: Type.STRING, nullable: true },
-        transactions: { type: Type.ARRAY, items: ITEM_SCHEMA },
-      },
-      required: ["transactions"],
-    };
-
-    const modelStartedAt = Date.now();
-    const response = await withTimeout(
-      callGeminiWithBackoff(
-        () =>
-          ai.models.generateContent({
-            model: MODEL,
-            contents: [{ role: "user", parts }],
-            config: {
-              responseMimeType: "application/json",
-              responseSchema: schema,
-              temperature: 0,
-              // Nothing to deliberate about: read the rows, fill the schema.
-              thinkingConfig: { thinkingBudget: 0 },
+      const pages = await splitPdfPages(params.buffer);
+      if (pages.length > 1) {
+        parsed = await readPdfByPage(ai, pages, prompt, warnings, params.deadline);
+      } else {
+        // One page, or a file pdf-lib would not open: send it whole.
+        parsed = await readWithVision(
+          ai,
+          [
+            {
+              inlineData: {
+                data: params.buffer.toString("base64"),
+                mimeType: "application/pdf",
+              },
             },
-          }),
-        { deadline: params.deadline }
-      ),
-      params.deadline
-    );
-    console.log(`[parse] vision model answered in ${Date.now() - modelStartedAt}ms`);
-
-    const out = response.text;
-    if (!out) throw new Error("The model returned no content.");
-    parsed = JSON.parse(out) as ParsedStatement;
+            { text: prompt },
+          ],
+          params.deadline
+        );
+      }
+    } else {
+      parsed = await readWithVision(
+        ai,
+        [
+          {
+            text:
+              prompt +
+              String.fromCharCode(10) +
+              String.fromCharCode(10) +
+              "STATEMENT CONTENT:" +
+              String.fromCharCode(10) +
+              text,
+          },
+        ],
+        params.deadline
+      );
+    }
   }
 
   const labelSet = new Set(labels);
