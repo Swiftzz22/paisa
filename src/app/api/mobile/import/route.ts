@@ -66,12 +66,19 @@ export async function POST(req: NextRequest) {
   if (!allowance.allowed) return paywallResponse(allowance, "statement imports");
 
   try {
+    // Phase timings, because a 504 tells you only that something was slow.
+    // The model, the database and the file read all live in here and a bare
+    // timeout cannot say which one stalled.
+    const buffer = Buffer.from(await file.arrayBuffer());
+    console.log(`[mobile/import] read ${buffer.length}B in ${Date.now() - startedAt}ms`);
+
     const result = await importUniversalStatement({
       userId: user.id,
-      fileBuffer: Buffer.from(await file.arrayBuffer()),
+      fileBuffer: buffer,
       filename,
       deadline: startedAt + PARSE_BUDGET_MS,
     });
+    console.log(`[mobile/import] done in ${Date.now() - startedAt}ms`);
     await consume(user.id, "import", tz);
     return Response.json({
       ok: true,

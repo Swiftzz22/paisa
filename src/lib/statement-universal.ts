@@ -1,7 +1,7 @@
 import "server-only";
 import { GoogleGenAI, Type } from "@google/genai";
 import * as XLSX from "xlsx";
-import { callGeminiWithBackoff } from "@/lib/email/parser";
+import { callGeminiWithBackoff, OutOfTimeError } from "@/lib/email/parser";
 
 // Statement parsing is infrequent and accuracy-critical (wrong numbers = wrong
 // finances), so we use the stronger model rather than -lite.
@@ -100,6 +100,29 @@ ${params.labels.join("\n")}`;
 }
 
 /**
+ * Reject once the deadline passes, whatever the request is doing.
+ *
+ * The in-flight call is not cancelled — it simply stops being waited on, so
+ * the route can answer with a sentence instead of being killed mid-request.
+ */
+async function withTimeout<T>(work: Promise<T>, deadline?: number): Promise<T> {
+  if (!deadline) return work;
+  const left = deadline - Date.now();
+  if (left <= 0) throw new OutOfTimeError();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new OutOfTimeError()), left);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
  * Universal statement parser. Accepts PDF (sent to Gemini as an image),
  * spreadsheet, or CSV (flattened to text), and returns a normalized list of
  * transactions for any bank. Optionally filters to one cardholder for
@@ -167,7 +190,13 @@ export async function parseStatementFile(params: {
     required: ["transactions"],
   };
 
-  const response = await callGeminiWithBackoff(
+  // A hard stop on the request itself, not just on the waits between retries.
+  // The deadline alone did not save us: it guards the sleeps, while a single
+  // generateContent call that never answers runs until the function is killed
+  // — which is exactly what a 504 with no log line looks like.
+  const modelStartedAt = Date.now();
+  const response = await withTimeout(
+    callGeminiWithBackoff(
     () =>
     ai.models.generateContent({
       model: MODEL,
@@ -179,7 +208,10 @@ export async function parseStatementFile(params: {
       },
     }),
     { deadline: params.deadline }
+    ),
+    params.deadline
   );
+  console.log(`[parse] model answered in ${Date.now() - modelStartedAt}ms`);
 
   const text = response.text;
   if (!text) throw new Error("Gemini returned no content.");
