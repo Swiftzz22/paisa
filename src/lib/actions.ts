@@ -302,6 +302,10 @@ export async function uploadStatementAction(form: FormData) {
       fileBuffer: buffer,
       filename,
       cardholderName,
+      // Same reason as the app's route: without a deadline a rate-limited
+      // model call sleeps past the function's own lifetime and the upload
+      // dies with no message at all.
+      deadline: Date.now() + 45_000,
     });
 
     revalidatePath("/");

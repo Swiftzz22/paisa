@@ -110,6 +110,15 @@ export async function parseStatementFile(params: {
   filename: string;
   cardholderName?: string | null;
   categories: CategoryChoice[];
+  /**
+   * Epoch ms this call must return by.
+   *
+   * Without it, a 429 from Gemini puts the retry loop to sleep for up to 90
+   * seconds inside a function that is killed at 60 — so the upload died with
+   * no error at all, just a 504 and an app saying "try again". The backoff
+   * already knew how to give up cleanly; it was never told when to.
+   */
+  deadline?: number;
 }): Promise<UniversalParseResult> {
   const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
   if (!apiKey) {
@@ -158,7 +167,8 @@ export async function parseStatementFile(params: {
     required: ["transactions"],
   };
 
-  const response = await callGeminiWithBackoff(() =>
+  const response = await callGeminiWithBackoff(
+    () =>
     ai.models.generateContent({
       model: MODEL,
       contents: [{ role: "user", parts }],
@@ -167,7 +177,8 @@ export async function parseStatementFile(params: {
         responseSchema: schema,
         temperature: 0,
       },
-    })
+    }),
+    { deadline: params.deadline }
   );
 
   const text = response.text;

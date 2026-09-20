@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getMobileUser } from "@/lib/auth/mobile";
 import { importUniversalStatement } from "@/lib/statement-import";
+import { OutOfTimeError } from "@/lib/email/parser";
 import { checkAllowance, consume, paywallResponse } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +22,15 @@ const ALLOWED = [".csv", ".xlsx", ".xls", ".pdf", ".txt"];
  * because statement upload was previously web-only, which meant anyone whose
  * bank paisa. cannot read from email had to go find a browser.
  */
+/**
+ * Leave the model less time than the function has, so a slow parse comes back
+ * as a sentence rather than a 504. Vercel kills this at 60s; stopping at 45
+ * leaves room to write the response and tell the person what happened.
+ */
+const PARSE_BUDGET_MS = 45_000;
+
 export async function POST(req: NextRequest) {
+  const startedAt = Date.now();
   const user = await getMobileUser(req.headers.get("authorization"));
   if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
 
@@ -61,6 +70,7 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       fileBuffer: Buffer.from(await file.arrayBuffer()),
       filename,
+      deadline: startedAt + PARSE_BUDGET_MS,
     });
     await consume(user.id, "import", tz);
     return Response.json({
@@ -71,6 +81,19 @@ export async function POST(req: NextRequest) {
       rows: result.totalRows,
     });
   } catch (e) {
+    // Ran out of time waiting on the model — usually Gemini rate-limiting us.
+    // Worth its own answer: nothing is wrong with the file, and trying again
+    // shortly genuinely works, which "couldn't read that file" would deny.
+    if (e instanceof OutOfTimeError) {
+      console.error("[mobile/import] out of time waiting for the model");
+      return Response.json(
+        {
+          error:
+            "Reading that statement is taking longer than usual — the AI service is busy. Please try again in a minute.",
+        },
+        { status: 503 }
+      );
+    }
     console.error("[mobile/import] failed:", e);
     return Response.json(
       {

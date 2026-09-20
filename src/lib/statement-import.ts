@@ -48,6 +48,8 @@ export async function importUniversalStatement(params: {
   fileBuffer: Buffer;
   filename: string;
   cardholderName?: string | null;
+  /** Epoch ms the whole import must finish by; passed down to the model call. */
+  deadline?: number;
 }): Promise<ImportResult> {
   const categoryOptions = await getCategoryOptions(params.userId);
   const labelToId = new Map(categoryOptions.map((c) => [c.label, c.id] as const));
@@ -57,6 +59,7 @@ export async function importUniversalStatement(params: {
     filename: params.filename,
     cardholderName: params.cardholderName,
     categories: categoryOptions.map((c) => ({ label: c.label, id: c.id })),
+    deadline: params.deadline,
   });
 
   return persistUniversalRows({
