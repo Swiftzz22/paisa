@@ -1,7 +1,11 @@
 import "server-only";
 import { GoogleGenAI, Type } from "@google/genai";
 import * as XLSX from "xlsx";
-import { callGeminiWithBackoff, OutOfTimeError } from "@/lib/email/parser";
+import {
+  callGeminiWithBackoff,
+  nvidiaJsonObject,
+  OutOfTimeError,
+} from "@/lib/email/parser";
 
 // Statement parsing is infrequent and accuracy-critical (wrong numbers = wrong
 // finances), so we use the stronger model rather than -lite.
@@ -100,6 +104,50 @@ ${params.labels.join("\n")}`;
 }
 
 /**
+ * Text out of a PDF, using the copy of pdfjs already in the project.
+ *
+ * Worth doing because it changes which model can read the file at all. A PDF
+ * sent to Gemini goes as an image and is slow enough to time out on a long
+ * statement; the same statement as text is a few tens of kilobytes and any
+ * text model can read it in seconds.
+ *
+ * Returns "" for a scanned statement with no text layer, which is the signal
+ * to fall back to the vision path rather than parse an empty string.
+ */
+async function pdfToText(buffer: Buffer): Promise<string> {
+  try {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const doc = await pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      useSystemFonts: true,
+      // No worker in a serverless function: there is no second thread to put
+      // it on, and asking for one fails at import time.
+      disableWorker: true,
+    } as Parameters<typeof pdfjs.getDocument>[0]).promise;
+
+    const pages: string[] = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      pages.push(
+        content.items
+          .map((it) => ("str" in it ? it.str : ""))
+          .join(" ")
+          .replace(/\s+/g, " ")
+      );
+    }
+    return pages.join(String.fromCharCode(10)).trim();
+  } catch {
+    // A corrupt or encrypted PDF is not worth a hard failure here — the vision
+    // path may still manage it.
+    return "";
+  }
+}
+
+/** Enough extracted characters to believe the PDF has a real text layer. */
+const MIN_PDF_TEXT = 200;
+
+/**
  * Reject once the deadline passes, whatever the request is doing.
  *
  * The in-flight call is not cancelled — it simply stops being waited on, so
@@ -156,71 +204,35 @@ export async function parseStatementFile(params: {
   const labels = params.categories.map((c) => c.label);
   const prompt = buildPrompt({ cardholderName: params.cardholderName, labels });
 
-  // Build the request parts depending on file modality.
-  const parts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }> = [];
-  if (kind === "pdf") {
-    parts.push({
-      inlineData: { data: params.buffer.toString("base64"), mimeType: "application/pdf" },
-    });
-    parts.push({ text: prompt });
-  } else if (kind === "spreadsheet" || kind === "csv") {
-    let text =
-      kind === "spreadsheet"
-        ? spreadsheetToText(params.buffer)
-        : params.buffer.toString("utf8");
-    if (text.length > MAX_TEXT_CHARS) {
-      text = text.slice(0, MAX_TEXT_CHARS);
-      warnings.push(
-        "Statement was large and may have been truncated — if rows are missing, split it by month and re-upload."
-      );
-    }
-    parts.push({ text: `${prompt}\n\nSTATEMENT CONTENT:\n${text}` });
-  } else {
+  if (kind !== "pdf" && kind !== "spreadsheet" && kind !== "csv") {
     throw new Error(
       "Unsupported file type. Upload a .pdf, .xlsx, .xls, or .csv statement."
     );
   }
 
-  const schema = {
-    type: Type.OBJECT,
-    properties: {
-      bank_name: { type: Type.STRING, nullable: true },
-      transactions: { type: Type.ARRAY, items: ITEM_SCHEMA },
-    },
-    required: ["transactions"],
-  };
+  /**
+   * The statement as text, when it can be had.
+   *
+   * Spreadsheets and CSVs are text already, and a PDF usually carries a text
+   * layer too. Reading it here is what lets the fast text model do the work: a
+   * 771KB PDF handed to a vision model timed out, while the same pages as text
+   * are a few tens of kilobytes and read in seconds.
+   */
+  let text =
+    kind === "spreadsheet"
+      ? spreadsheetToText(params.buffer)
+      : kind === "csv"
+        ? params.buffer.toString("utf8")
+        : await pdfToText(params.buffer);
 
-  // A hard stop on the request itself, not just on the waits between retries.
-  // The deadline alone did not save us: it guards the sleeps, while a single
-  // generateContent call that never answers runs until the function is killed
-  // — which is exactly what a 504 with no log line looks like.
-  const modelStartedAt = Date.now();
-  const response = await withTimeout(
-    callGeminiWithBackoff(
-    () =>
-    ai.models.generateContent({
-      model: MODEL,
-      contents: [{ role: "user", parts }],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-        temperature: 0,
-        // 2.5 models reason before answering unless told not to, and that
-        // reasoning is most of the wall-clock time on a long statement. There
-        // is nothing here to reason about: read the rows, fill the schema. A
-        // 771KB PDF was timing out at 45s almost entirely on thinking.
-        thinkingConfig: { thinkingBudget: 0 },
-      },
-    }),
-    { deadline: params.deadline }
-    ),
-    params.deadline
-  );
-  console.log(`[parse] model answered in ${Date.now() - modelStartedAt}ms`);
+  if (text.length > MAX_TEXT_CHARS) {
+    text = text.slice(0, MAX_TEXT_CHARS);
+    warnings.push(
+      "Statement was large and may have been truncated — if rows are missing, split it by month and re-upload."
+    );
+  }
 
-  const text = response.text;
-  if (!text) throw new Error("Gemini returned no content.");
-  const parsed = JSON.parse(text) as {
+  type ParsedStatement = {
     bank_name?: string | null;
     transactions: Array<{
       date: string;
@@ -233,6 +245,83 @@ export async function parseStatementFile(params: {
       category_label?: string | null;
     }>;
   };
+
+  // A scanned statement has no text layer, so there is nothing for a text
+  // model to read. Only those need the vision path.
+  const hasText = kind === "pdf" ? text.length >= MIN_PDF_TEXT : text.length > 0;
+  let parsed: ParsedStatement | null = null;
+
+  if (hasText) {
+    try {
+      const raw = (await nvidiaJsonObject(
+        prompt,
+        "STATEMENT CONTENT:" + String.fromCharCode(10) + text,
+        { deadline: params.deadline, maxTokens: 8192 }
+      )) as ParsedStatement;
+      if (Array.isArray(raw?.transactions)) {
+        parsed = raw;
+        console.log(`[parse] text model returned ${raw.transactions.length} rows`);
+      }
+    } catch (e) {
+      if (e instanceof OutOfTimeError) throw e;
+      // Answered badly, refused, or rate-limited. The vision path can still
+      // read the file, so this is a detour rather than a failure.
+      console.error("[parse] text model failed, falling back to vision:", e);
+    }
+  }
+
+  if (!parsed) {
+    const parts: Array<
+      { text: string } | { inlineData: { data: string; mimeType: string } }
+    > = [];
+    if (kind === "pdf") {
+      parts.push({
+        inlineData: {
+          data: params.buffer.toString("base64"),
+          mimeType: "application/pdf",
+        },
+      });
+      parts.push({ text: prompt });
+    } else {
+      parts.push({
+        text: prompt + String.fromCharCode(10) + String.fromCharCode(10) + "STATEMENT CONTENT:" + String.fromCharCode(10) + text,
+      });
+    }
+
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        bank_name: { type: Type.STRING, nullable: true },
+        transactions: { type: Type.ARRAY, items: ITEM_SCHEMA },
+      },
+      required: ["transactions"],
+    };
+
+    const modelStartedAt = Date.now();
+    const response = await withTimeout(
+      callGeminiWithBackoff(
+        () =>
+          ai.models.generateContent({
+            model: MODEL,
+            contents: [{ role: "user", parts }],
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: schema,
+              temperature: 0,
+              // Nothing to deliberate about: read the rows, fill the schema.
+              thinkingConfig: { thinkingBudget: 0 },
+            },
+          }),
+        { deadline: params.deadline }
+      ),
+      params.deadline
+    );
+    console.log(`[parse] vision model answered in ${Date.now() - modelStartedAt}ms`);
+
+    const out = response.text;
+    if (!out) throw new Error("The model returned no content.");
+    parsed = JSON.parse(out) as ParsedStatement;
+  }
 
   const labelSet = new Set(labels);
   const rows: UniversalRow[] = [];

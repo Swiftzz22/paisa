@@ -185,11 +185,12 @@ export function isGeminiConfigured(): boolean {
  * We ask the model for `{ "results": [...] }` and unwrap it. Throws
  * GeminiRateLimitError on 429 so callers keep their rate-limit handling.
  */
-async function nvidiaJsonArray(
+export async function nvidiaJsonObject(
   systemPrompt: string,
   userContent: string,
-  deadline?: number
-): Promise<unknown[]> {
+  opts?: { deadline?: number; maxTokens?: number }
+): Promise<unknown> {
+  const deadline = opts?.deadline;
   const apiKey = process.env.NVIDIA_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -218,7 +219,7 @@ async function nvidiaJsonArray(
           { role: "user", content: userContent },
         ],
         temperature: 0,
-        max_tokens: 4096,
+        max_tokens: opts?.maxTokens ?? 4096,
         response_format: { type: "json_object" },
       }),
       signal: controller.signal,
@@ -254,6 +255,21 @@ async function nvidiaJsonArray(
       .trim();
     parsed = JSON.parse(cleaned);
   }
+  return parsed;
+}
+
+/**
+ * The same call, unwrapped to the array callers usually want. Kept because
+ * every existing caller asks for `{ "results": [...] }` and only wants the
+ * rows; the statement parser needs the surrounding object too, which is why
+ * the two are now separate.
+ */
+async function nvidiaJsonArray(
+  systemPrompt: string,
+  userContent: string,
+  deadline?: number
+): Promise<unknown[]> {
+  const parsed = await nvidiaJsonObject(systemPrompt, userContent, { deadline });
   if (Array.isArray(parsed)) return parsed;
   const obj = (parsed ?? {}) as Record<string, unknown>;
   for (const key of ["results", "transactions", "items", "data"]) {
