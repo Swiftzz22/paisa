@@ -13,6 +13,8 @@ import {
 } from "@/lib/actions";
 import { formatDateTime } from "@/lib/format";
 import { getLastSyncRun } from "@/lib/sync";
+import { getInboundAddress } from "@/lib/email/inbound";
+import { ForwardingCard } from "@/components/ForwardingCard";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +34,9 @@ export default async function EmailSettingsPage({
   const account = await getEmailAccount(user.id);
   const oauthReady = isGoogleConfigured();
   const geminiReady = isGeminiConfigured();
+  // Minted on first look rather than at signup, so accounts that never use
+  // forwarding never get an address that could be leaked.
+  const forwardingAddress = await getInboundAddress(user.id);
 
   const [totalCount, lastEmail, pendingCount] = account
     ? await Promise.all([
@@ -196,10 +201,11 @@ export default async function EmailSettingsPage({
           )}
         </div>
       )}
+
+      <ForwardingCard address={forwardingAddress} />
     </main>
   );
 }
-
 function Banner({
   kind,
   children,

@@ -140,10 +140,10 @@ export async function runSyncForUser(
 
   try {
     const accounts = await getAccountsWithTokens(userId);
-    if (accounts.length === 0) {
-      // No mailbox connected for this user — nothing to fetch.
-      return status;
-    }
+    // No mailbox connected means nothing to FETCH — but mail forwarded to this
+    // user's private address is already in the queue, and step 3 below is the
+    // only thing that turns it into transactions. Returning here left it
+    // pending forever.
     status.account = accounts.map((a) => a.accountEmail).join(", ");
 
     // Every connected mailbox gets a pass. Someone whose bank writes to a work
@@ -233,19 +233,40 @@ export async function runSyncForUser(
 }
 
 /**
- * Background tick: sync EVERY user that has a connected email account.
- * Re-entrancy-safe (skips if a tick is already running). Processes users
- * sequentially to stay well under Gemini's rate limits.
+ * Everyone with work waiting: a connected mailbox to fetch from, or mail
+ * already sitting in the queue.
+ *
+ * The second half is what makes forwarding work at all. Mail forwarded to a
+ * private paisa address arrives by webhook and is stored `pending`, but the
+ * tick used to enumerate `emailAccount` alone — so a user who had never
+ * connected Gmail was never visited, and their mail was received, validated,
+ * stored and then never looked at again.
+ */
+async function userIdsWithWork(): Promise<string[]> {
+  const [accounts, pending] = await Promise.all([
+    prisma.emailAccount.findMany({ select: { userId: true } }),
+    prisma.receivedEmail.findMany({
+      where: { parseStatus: { in: ["pending", "failed"] } },
+      select: { userId: true },
+      distinct: ["userId"],
+    }),
+  ]);
+  return Array.from(
+    new Set([...accounts.map((a) => a.userId), ...pending.map((p) => p.userId)])
+  );
+}
+
+/**
+ * Background tick: sync every user with a connected email account or mail
+ * waiting to be parsed. Re-entrancy-safe (skips if a tick is already running).
+ * Processes users sequentially to stay well under Gemini's rate limits.
  */
 export async function runSyncTick(deadline?: number): Promise<void> {
   const state = syncState();
   if (state.running) return;
   state.running = true;
   try {
-    const accounts = await prisma.emailAccount.findMany({
-      select: { userId: true },
-    });
-    for (const { userId } of accounts) {
+    for (const userId of await userIdsWithWork()) {
       // Stop handing out work once the budget is spent; the next tick picks up
       // the remaining users rather than the whole run dying on a timeout.
       if (deadline !== undefined && Date.now() >= deadline) break;
