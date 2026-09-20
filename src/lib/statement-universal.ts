@@ -79,11 +79,29 @@ const ITEM_SCHEMA = {
 
 function buildPrompt(params: {
   cardholderName?: string | null;
+  accountHolderName?: string | null;
   labels: string[];
 }): string {
+  /**
+   * Two different rules, because they answer two different questions.
+   *
+   * `cardholderName` is typed into the web form: the person has said this is a
+   * joint statement and named who to keep. That is a hard filter.
+   *
+   * `accountHolderName` is just who is signed in, so it cannot assume anything.
+   * A family credit card is issued in the parent's name with an add-on card in
+   * the child's, and importing that on a phone would otherwise pull in the
+   * whole family's spending. But most statements name one person and list only
+   * their transactions, and filtering those against a signed-in name that the
+   * bank spells differently would empty the import. So it only narrows a
+   * statement that visibly separates cardholders, and keeps everything
+   * otherwise.
+   */
   const cardholderRule = params.cardholderName
     ? `\nThis is a JOINT / FAMILY statement covering multiple cardholders. ONLY include transactions belonging to "${params.cardholderName}" (case-insensitive — their section is usually headed by their name and card number). Skip every other cardholder's transactions entirely.`
-    : "";
+    : params.accountHolderName
+      ? `\nThe person importing this is "${params.accountHolderName}". IF — and only if — the statement splits its transactions between two or more named cardholders (typically a section headed by each person's name and card number), keep ONLY the sections belonging to that person, matching loosely on the name (initials, middle names, honorifics like MR/MS and different capitalisation all still count as the same person). If the statement does not separate cardholders that way, include every transaction as normal. Never return an empty result merely because the name is spelled differently.`
+      : "";
 
   return `You are extracting transactions from an Indian bank or credit-card statement (any bank/issuer, any format). Reply with structured JSON only.
 
@@ -457,6 +475,8 @@ export async function parseStatementFile(params: {
   buffer: Buffer;
   filename: string;
   cardholderName?: string | null;
+  /** Who is signed in — narrows a joint statement only. See buildPrompt. */
+  accountHolderName?: string | null;
   categories: CategoryChoice[];
   /**
    * Epoch ms this call must return by.
@@ -479,7 +499,11 @@ export async function parseStatementFile(params: {
   const kind = detectKind(params.filename);
   const warnings: string[] = [];
   const labels = params.categories.map((c) => c.label);
-  const prompt = buildPrompt({ cardholderName: params.cardholderName, labels });
+  const prompt = buildPrompt({
+    cardholderName: params.cardholderName,
+    accountHolderName: params.accountHolderName,
+    labels,
+  });
 
   if (kind !== "pdf" && kind !== "spreadsheet" && kind !== "csv") {
     throw new Error(

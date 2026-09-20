@@ -48,6 +48,8 @@ export async function importUniversalStatement(params: {
   fileBuffer: Buffer;
   filename: string;
   cardholderName?: string | null;
+  /** Who is signed in — narrows a joint statement only. */
+  accountHolderName?: string | null;
   /** Epoch ms the whole import must finish by; passed down to the model call. */
   deadline?: number;
 }): Promise<ImportResult> {
@@ -58,6 +60,7 @@ export async function importUniversalStatement(params: {
     buffer: params.fileBuffer,
     filename: params.filename,
     cardholderName: params.cardholderName,
+    accountHolderName: params.accountHolderName,
     categories: categoryOptions.map((c) => ({ label: c.label, id: c.id })),
     deadline: params.deadline,
   });

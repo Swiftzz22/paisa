@@ -302,6 +302,10 @@ export async function uploadStatementAction(form: FormData) {
       fileBuffer: buffer,
       filename,
       cardholderName,
+      // Falls back to the signed-in name when the box is left empty, so the
+      // web behaves like the app rather than quietly importing a whole
+      // family's card. An explicit name still wins.
+      accountHolderName: user.name,
       // Same reason as the app's route: without a deadline a rate-limited
       // model call sleeps past the function's own lifetime and the upload
       // dies with no message at all.

@@ -77,6 +77,10 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       fileBuffer: buffer,
       filename,
+      // A family credit card is issued in one parent's name with an add-on
+      // card in the child's, and both appear on the same statement. Without
+      // this the app imports the whole household's spending as the user's own.
+      accountHolderName: user.name,
       deadline: startedAt + PARSE_BUDGET_MS,
     });
     console.log(`[mobile/import] done in ${Date.now() - startedAt}ms`);

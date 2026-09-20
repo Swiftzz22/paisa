@@ -7,19 +7,32 @@ import type { AppleIdentity } from "@/lib/auth/apple-login";
 /**
  * Turn an Apple identity into a user.
  *
- * The rule is `sub` first, and email is never used to recognise someone. Both
- * directions of the email shortcut are wrong here:
+ * `sub` first, always. After that there is one narrow case where email is a
+ * sound way to recognise someone, and it is worth taking, because the
+ * alternative is that everyone who has ever used paisa. gets a stranger's
+ * empty account the first time they tap Sign in with Apple.
  *
- * - Someone who signed up with Google and later picks "Hide My Email" arrives
- *   as `abc@privaterelay.appleid.com`, which matches nothing. Linking on email
- *   would be impossible; creating a second account is correct.
- * - Someone who picks "Share My Email" arrives as their real address. Linking
- *   on that alone would hand whoever controls that Apple ID full access to an
- *   existing account — an account takeover with extra steps.
+ * The case is: Apple says the address is real (not a relay) and that it
+ * verified it, and the account that holds that address signed up with Google,
+ * which also verified it. Both sides are then an independent proof of control
+ * of the same mailbox. To hold alice@gmail.com on an Apple ID you must answer
+ * a code Apple sends to alice@gmail.com, so an attacker who cannot read that
+ * mailbox cannot arrive here.
  *
- * So a new Apple identity always becomes a new account. Joining it to an
- * existing one is a separate, deliberate action taken while already signed in
- * (see linkAppleToUser), where consent is explicit.
+ * Every condition is load-bearing and none may be relaxed alone:
+ *
+ * - `isPrivateEmail === false`, explicitly — a relay address is verified too
+ *   (Apple checks deliverability of relays), so verification alone proves
+ *   nothing. `null` means Apple omitted the claim and is not good enough.
+ * - `emailVerified` — an unverified address is a claim, not a proof.
+ * - the existing account has a `googleSub` — its address was verified by
+ *   Google rather than typed in. Nothing else in this app vouches for one.
+ * - the existing account has no `appleSub` — it belongs to another Apple ID
+ *   already, and this is not a place to overrule that.
+ *
+ * Anything short of all four still becomes a new account, and joining it to an
+ * existing one stays a deliberate action taken while signed in — see
+ * linkAppleToUser, where consent is explicit.
  */
 
 /** Trim and bound a client-supplied name; Apple never sees or vouches for it. */
@@ -73,10 +86,38 @@ export async function resolveUserForAppleLogin(
     return { id: bySub.id, isNew: false };
   }
 
-  // 2. New Apple identity — always a new account. See the note above for why
-  //    matching on email is unsafe in both directions.
   const usable =
     identity.email && identity.isPrivateEmail === false ? identity.email : null;
+
+  // 2. A real, Apple-verified address that already belongs to a Google
+  //    account. Both providers have proved the same mailbox, so this is the
+  //    same person arriving by a second door. See the note above — all four
+  //    conditions are required.
+  if (usable && identity.emailVerified) {
+    // Both providers hand back a lowercase address, but the column is stored
+    // verbatim and SQLite compares case-sensitively, so an older row spelled
+    // differently would silently miss and quietly make a second account.
+    const candidates = Array.from(new Set([usable, usable.toLowerCase()]));
+    const byEmail = await prisma.user.findFirst({
+      where: { email: { in: candidates } },
+      select: { id: true, name: true, appleSub: true, googleSub: true },
+    });
+    if (byEmail && byEmail.googleSub && !byEmail.appleSub) {
+      const name = cleanName(fullName);
+      await prisma.user.update({
+        where: { id: byEmail.id },
+        data: {
+          appleSub: identity.sub,
+          appleLinkedAt: new Date(),
+          ...(name && !byEmail.name ? { name } : {}),
+          ...(encRefresh ? { appleRefreshTokenEnc: encRefresh } : {}),
+        },
+      });
+      return { id: byEmail.id, isNew: false };
+    }
+  }
+
+  // 3. Otherwise a new Apple identity is a new account.
   const email = usable ?? fallbackEmail(identity.sub);
 
   // Guard the placeholder against colliding with a real row.
