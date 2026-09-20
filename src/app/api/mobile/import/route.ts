@@ -24,10 +24,11 @@ const ALLOWED = [".csv", ".xlsx", ".xls", ".pdf", ".txt"];
  */
 /**
  * Leave the model less time than the function has, so a slow parse comes back
- * as a sentence rather than a 504. Vercel kills this at 60s; stopping at 45
- * leaves room to write the response and tell the person what happened.
+ * as a sentence rather than a 504. Vercel kills this at 60s; stopping at 52
+ * leaves room to write the response and tell the person what happened, while
+ * giving a long PDF as much of the window as can safely be spared.
  */
-const PARSE_BUDGET_MS = 45_000;
+const PARSE_BUDGET_MS = 52_000;
 
 export async function POST(req: NextRequest) {
   const startedAt = Date.now();

@@ -205,6 +205,11 @@ export async function parseStatementFile(params: {
         responseMimeType: "application/json",
         responseSchema: schema,
         temperature: 0,
+        // 2.5 models reason before answering unless told not to, and that
+        // reasoning is most of the wall-clock time on a long statement. There
+        // is nothing here to reason about: read the rows, fill the schema. A
+        // 771KB PDF was timing out at 45s almost entirely on thinking.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
     { deadline: params.deadline }
