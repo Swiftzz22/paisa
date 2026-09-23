@@ -30,5 +30,9 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "scripts", "prisma/seed.ts"]
+  // `workers` is a Cloudflare Worker with its own tsconfig and its own globals
+  // (ForwardableEmailMessage and friends come from @cloudflare/workers-types,
+  // not from the DOM lib this app compiles against). Left in, `next build`
+  // typechecks it against the wrong world and fails.
+  "exclude": ["node_modules", "scripts", "prisma/seed.ts", "workers"]
 }

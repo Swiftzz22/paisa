@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "paisa-inbound-email",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": {
+    // Where paisa. is served. Change this if the site moves to usepaisa.com;
+    // the old Vercel URL keeps working either way.
+    "PAISA_ORIGIN": "https://paisa-tawny.vercel.app"
+  }
+  // INBOUND_EMAIL_SECRET is NOT here on purpose. It is a secret, set with
+  //   npx wrangler secret put INBOUND_EMAIL_SECRET
+  // so it lives in Cloudflare rather than in a file that goes to GitHub.
+}

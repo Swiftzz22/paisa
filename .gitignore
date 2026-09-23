@@ -51,3 +51,7 @@ scripts/tmp-*.ts
 
 .vercel
 .env*
+
+# The inbound-email worker keeps its own dependencies.
+workers/*/node_modules
+workers/*/.wrangler
