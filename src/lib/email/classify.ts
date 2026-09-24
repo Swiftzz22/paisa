@@ -195,3 +195,42 @@ export function isForwardingVerification(fromAddress: string): boolean {
   const from = (fromAddress ?? "").toLowerCase();
   return VERIFICATION_SENDERS.some((sender) => from.includes(sender));
 }
+
+/**
+ * The Gmail search someone builds their forwarding filter from.
+ *
+ * Built from the same list the server classifies with, so the two cannot drift
+ * apart: a bank added above is forwarded from then on, with no second place to
+ * remember. Paste into Gmail's search box, then Create filter → Forward it to.
+ *
+ * `from:(a OR b)` rather than `from:a OR from:b` — same meaning to Gmail, but
+ * short enough that someone can read what they are about to apply to their
+ * whole inbox, which matters for a rule that forwards mail elsewhere.
+ */
+export function buildGmailForwardingFilter(): string {
+  // "@dbs.com" is anchored for substring matching on the server. Gmail matches
+  // sender text directly, where a leading "@" only gets in the way.
+  const senders = FINANCIAL_DOMAIN_PATTERNS.map((p) => p.replace(/^@/, "")).join(
+    " OR "
+  );
+  const marketing = MARKETING_SENDER_PATTERNS.join(" OR ");
+  return `from:(${senders}) -from:(${marketing}) -category:promotions`;
+}
+
+/**
+ * The code Gmail sent to prove someone controls the forwarding address.
+ *
+ * It is in the subject, as "(#123456789) Gmail Forwarding Confirmation — …".
+ * Pulling it out means the setup can print the code instead of asking someone
+ * to go and find a message in a debug inbox, which is the step this whole
+ * flow most reliably loses people at.
+ */
+export function forwardingConfirmationCode(
+  subject: string,
+  body?: string | null
+): string | null {
+  const fromSubject = /\(#(\d{6,12})\)/.exec(subject ?? "");
+  if (fromSubject) return fromSubject[1];
+  const fromBody = /\b(\d{9})\b/.exec(body ?? "");
+  return fromBody ? fromBody[1] : null;
+}

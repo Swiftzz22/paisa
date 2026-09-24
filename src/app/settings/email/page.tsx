@@ -13,7 +13,8 @@ import {
 } from "@/lib/actions";
 import { formatDateTime } from "@/lib/format";
 import { getLastSyncRun } from "@/lib/sync";
-import { getInboundAddress } from "@/lib/email/inbound";
+import { getInboundAddress, getForwardingStatus } from "@/lib/email/inbound";
+import { buildGmailForwardingFilter } from "@/lib/email/classify";
 import { ForwardingCard } from "@/components/ForwardingCard";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +38,7 @@ export default async function EmailSettingsPage({
   // Minted on first look rather than at signup, so accounts that never use
   // forwarding never get an address that could be leaked.
   const forwardingAddress = await getInboundAddress(user.id);
+  const forwardingStatus = await getForwardingStatus(user.id);
 
   const [totalCount, lastEmail, pendingCount] = account
     ? await Promise.all([
@@ -202,7 +204,11 @@ export default async function EmailSettingsPage({
         </div>
       )}
 
-      <ForwardingCard address={forwardingAddress} />
+      <ForwardingCard
+        address={forwardingAddress}
+        filter={buildGmailForwardingFilter()}
+        status={forwardingStatus}
+      />
     </main>
   );
 }

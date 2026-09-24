@@ -1,6 +1,7 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
+import { forwardingConfirmationCode } from "@/lib/email/classify";
 
 /**
  * Per-user forwarding addresses.
@@ -105,4 +106,56 @@ export async function userForInboundAddress(
     where: { inboundKey: key },
     select: { id: true },
   });
+}
+
+/**
+ * Whether forwarding is actually delivering, and what is still needed.
+ *
+ * Without this the only way to know a filter works is to ask someone to query
+ * the database — which is how the first real alert was found, and is not a
+ * thing anyone else can do. A setup that cannot tell you it is working is one
+ * people abandon while it is working.
+ */
+export type ForwardingStatus = {
+  /** Gmail's confirmation code, while one is waiting to be used. */
+  pendingCode: string | null;
+  lastReceivedAt: Date | null;
+  /** Stored in the last seven days — the sign that a filter is live. */
+  recentCount: number;
+};
+
+export async function getForwardingStatus(
+  userId: string
+): Promise<ForwardingStatus> {
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const [notice, last, recentCount] = await Promise.all([
+    prisma.receivedEmail.findFirst({
+      where: { userId, parseStatus: "notice" },
+      orderBy: { receivedAt: "desc" },
+      select: { subject: true, bodyText: true },
+    }),
+    // Notices are Google talking about the setup, not a bank alert — counting
+    // them as delivery would report success before anything has been forwarded.
+    prisma.receivedEmail.findFirst({
+      where: { userId, parseStatus: { not: "notice" } },
+      orderBy: { receivedAt: "desc" },
+      select: { receivedAt: true },
+    }),
+    prisma.receivedEmail.count({
+      where: {
+        userId,
+        parseStatus: { not: "notice" },
+        receivedAt: { gte: weekAgo },
+      },
+    }),
+  ]);
+
+  return {
+    pendingCode: notice
+      ? forwardingConfirmationCode(notice.subject, notice.bodyText)
+      : null,
+    lastReceivedAt: last?.receivedAt ?? null,
+    recentCount,
+  };
 }
