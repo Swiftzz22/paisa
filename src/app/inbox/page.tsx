@@ -26,13 +26,15 @@ export default async function InboxPage({
   const user = await getCurrentUser();
 
   // Inbox shows only relevant emails — parsed (became an expense), failed
-  // (need attention), and pending (not yet processed). Ignored emails are
+  // (need attention), pending (not yet processed), and notices, which are
+  // there to be acted on: Gmail's forwarding confirmation is the one piece of
+  // mail without which forwarding cannot be set up at all. Ignored emails are
   // pre-filter noise and never shown here.
   const [emails, ignoredCount] = await Promise.all([
     prisma.receivedEmail.findMany({
       where: {
         userId: user.id,
-        parseStatus: { in: ["pending", "parsed", "failed"] },
+        parseStatus: { in: ["pending", "parsed", "failed", "notice"] },
       },
       orderBy: { receivedAt: "desc" },
       take: 100,
@@ -150,6 +152,7 @@ function ParseBadge({ status }: { status: string }) {
     parsed: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
     failed: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
     ignored: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500",
+    notice: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
   };
   const cls = styles[status] ?? styles.pending;
   return (

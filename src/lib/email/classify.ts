@@ -132,3 +132,25 @@ export function looksLikeTransactionEmail(params: {
   if (SOFT_NEGATIVE_KEYWORDS.test(subject)) return false;
   return TRANSACTION_KEYWORDS.test(subject);
 }
+
+/**
+ * Mail that exists to let someone finish setting forwarding up.
+ *
+ * Gmail will not forward to an address until it has sent a code there and had
+ * it confirmed, and that mail comes from Google rather than a bank — so the
+ * transaction filter above discards it, and the person is stuck: the address
+ * cannot be verified, so nothing can ever be forwarded to it. The one piece of
+ * mail that makes the feature usable was the one piece we threw away.
+ *
+ * Matched narrowly, on Google's own no-reply sender, because this bypasses the
+ * filter that keeps the rest of someone's inbox out of the database.
+ */
+const VERIFICATION_SENDERS = [
+  "forwarding-noreply@google.com",
+  "noreply-forwarding@google.com",
+];
+
+export function isForwardingVerification(fromAddress: string): boolean {
+  const from = (fromAddress ?? "").toLowerCase();
+  return VERIFICATION_SENDERS.some((sender) => from.includes(sender));
+}

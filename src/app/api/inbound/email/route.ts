@@ -3,7 +3,10 @@ import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { userForInboundAddress } from "@/lib/email/inbound";
-import { looksLikeTransactionEmail } from "@/lib/email/classify";
+import {
+  isForwardingVerification,
+  looksLikeTransactionEmail,
+} from "@/lib/email/classify";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -69,10 +72,19 @@ export async function POST(req: NextRequest) {
   // will never resolve, and a probe should not learn which addresses exist.
   if (!user) return Response.json({ ok: true, ignored: "unknown-recipient" });
 
+  // Gmail's "confirm this forwarding address" mail, which comes from Google
+  // and so would be discarded by the bank filter below. Kept, and marked as a
+  // notice rather than pending, so it shows in the inbox to be acted on and is
+  // never sent to the model — there is no transaction in it to find.
+  const isVerification = isForwardingVerification(mail.from);
+
   // Only mail that looks like a bank alert is kept. A filter set too broadly
   // would otherwise pour someone's whole inbox into our database — their
   // mistake, but our liability.
-  if (!looksLikeTransactionEmail({ fromAddress: mail.from, subject: mail.subject })) {
+  if (
+    !isVerification &&
+    !looksLikeTransactionEmail({ fromAddress: mail.from, subject: mail.subject })
+  ) {
     return Response.json({ ok: true, ignored: "not-a-bank-email" });
   }
 
@@ -95,7 +107,7 @@ export async function POST(req: NextRequest) {
       rawHtml: mail.html ?? "",
       bodyText: mail.text ?? null,
       receivedAt: receivedAtFrom(mail.date),
-      parseStatus: "pending",
+      parseStatus: isVerification ? "notice" : "pending",
     },
   });
 
