@@ -30,6 +30,45 @@ export const FINANCIAL_DOMAIN_PATTERNS = [
   "iob.in",
   "aubank",
   "dcbbank",
+  // Remaining public sector banks.
+  "idbibank",
+  "indianbank",
+  "centralbankofindia",
+  "ucobank",
+  "bankofmaharashtra",
+  "mahabank",
+  "punjabandsindbank",
+  // Remaining private banks. Foreign banks operating in India are anchored on
+  // "@" because their domains are short enough to appear inside an unrelated
+  // one — the same trap that a bare "google.com" fell into above.
+  "karnatakabank",
+  "kvb.co.in",
+  "southindianbank",
+  "csb.co.in",
+  "cityunionbank",
+  "jkbank",
+  "standardchartered",
+  "@dbs.com",
+  // Small finance banks.
+  "equitas",
+  "ujjivan",
+  "janabank",
+  "suryoday",
+  "esafbank",
+  // Payments banks. "airtelbank", not "airtel": the latter would match every
+  // mobile bill and recharge receipt Airtel sends.
+  "airtelbank",
+  "jiopaymentsbank",
+  "ippbonline",
+  "finobank",
+  // Neobanks and the newer cards, which send their own alerts rather than the
+  // sponsor bank's.
+  "fi.money",
+  "jupiter.money",
+  "sliceit",
+  "getonecard",
+  "uni.cards",
+  "bajajfinserv",
   // UPI / wallets
   "phonepe",
   "paytm",
@@ -43,6 +82,8 @@ export const FINANCIAL_DOMAIN_PATTERNS = [
   "bhim",
   "cred.club",
   "amazonpay",
+  "mobikwik",
+  "freecharge",
   // Aggregators / cards
   "hdfcsec",
   "icicidirect",
