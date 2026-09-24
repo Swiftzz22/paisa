@@ -231,27 +231,42 @@ export async function processPendingForUser(
         continue;
       }
 
-      await prisma.transaction.create({
-        data: {
-          userId,
-          merchant: merchantName,
-          merchantRaw: email.fromAddress,
-          amount,
-          occurredAt: txAt,
-          paymentMode: extract.payment_mode ?? "card",
-          source: "email",
-          type: extract.kind,
-          emailId: email.id,
-          note: extract.note ?? null,
-          lines: {
-            create: [{ categoryId, amount }],
+      // One write, so the two cannot disagree.
+      //
+      // These were separate statements, and a test email was once left marked
+      // "parsed" with no transaction behind it — a state this code has no path
+      // to produce, which is exactly why it was impossible to investigate
+      // afterwards. Whatever caused it, "parsed" now means a transaction
+      // exists, because the same commit created both. The id is logged so a
+      // row that later goes missing can be traced rather than guessed at.
+      const created = await prisma.$transaction(async (tx) => {
+        const row = await tx.transaction.create({
+          data: {
+            userId,
+            merchant: merchantName,
+            merchantRaw: email.fromAddress,
+            amount,
+            occurredAt: txAt,
+            paymentMode: extract.payment_mode ?? "card",
+            source: "email",
+            type: extract.kind,
+            emailId: email.id,
+            note: extract.note ?? null,
+            lines: {
+              create: [{ categoryId, amount }],
+            },
           },
-        },
+          select: { id: true },
+        });
+        await tx.receivedEmail.update({
+          where: { id: email.id },
+          data: { parseStatus: "parsed", parseError: null },
+        });
+        return row;
       });
-      await prisma.receivedEmail.update({
-        where: { id: email.id },
-        data: { parseStatus: "parsed", parseError: null },
-      });
+      console.log(
+        `[parse] ${email.id} -> transaction ${created.id} (${extract.kind} ${amount} ${merchantName})`
+      );
       parsed++;
     }
   }
