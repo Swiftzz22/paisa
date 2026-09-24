@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { userForInboundAddress } from "@/lib/email/inbound";
+import { processPendingForUser } from "@/lib/email/process";
 import {
   isForwardingVerification,
   looksLikeTransactionEmail,
@@ -10,6 +11,15 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+// Storing is instant; reading the mail with a model is what needs the room.
+export const maxDuration = 60;
+
+/**
+ * Leave the model less time than the function has, so a slow parse still lets
+ * this route answer. The Cloudflare Worker waiting on it retries a 5xx, and a
+ * timeout there would mean mail redelivered rather than an error anyone sees.
+ */
+const PARSE_BUDGET_MS = 40_000;
 
 /** Guard against a forwarding loop or a bulk dump filling the database. */
 const MAX_BODY_CHARS = 200_000;
@@ -110,6 +120,27 @@ export async function POST(req: NextRequest) {
       parseStatus: isVerification ? "notice" : "pending",
     },
   });
+
+  // Read it now, rather than waiting for the cron.
+  //
+  // Vercel's Hobby plan allows one cron a day, and this project's runs at
+  // 06:00 UTC — so a forwarded alert would sit `pending` for up to twenty-four
+  // hours before becoming a transaction. That is fine for a mailbox we poll
+  // and useless for mail that is pushed to us: the whole appeal of forwarding
+  // is that the alert arrives the moment the bank sends it.
+  //
+  // Parsing here costs a model call inside this request, so it is bounded and
+  // failure is swallowed: the mail is already stored, the batch stays pending,
+  // and the next arrival or the cron picks it up. Never worth failing the
+  // delivery over — a 5xx would make the sending server retry mail we already
+  // have.
+  if (!isVerification) {
+    try {
+      await processPendingForUser(user.id, 5, Date.now() + PARSE_BUDGET_MS);
+    } catch (e) {
+      console.error("[inbound] stored, but parsing it now failed:", e);
+    }
+  }
 
   return Response.json({ ok: true, stored: true });
 }
