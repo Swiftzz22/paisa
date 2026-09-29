@@ -81,12 +81,13 @@ first:
 - **Upload a statement** — Settings → Add transactions → Upload a statement.
   Accepts CSV, Excel and PDF. A sample statement is here:
 
-  `https://paisa-tawny.vercel.app/sample-statement.csv`
+  `https://paisa-tawny.vercel.app/sample-statement.xlsx`
 
-  Download it to the device (Safari → Downloads), then pick it in the file
-  picker. It contains 30 fictional transactions and imports in a few seconds.
-  This is included in the free tier, so no purchase is required to see the app
-  fully populated.
+  It is also attached to this reply. Download it to the device (Safari →
+  Downloads), then pick it in the file picker. It contains fictional
+  transactions shaped like a real Indian bank export, and imports in a few
+  seconds. This is included in the free tier, so no purchase is required to see
+  the app fully populated.
 
 - **Connect a mailbox** — Settings → Connect Gmail. This reads only bank and UPI
   notification emails, using Google's read-only scope. This route is part of the
@@ -190,7 +191,7 @@ to four minutes.
 2. **Sign in with Apple.** Show the sheet and completing it.
 3. Land on the empty home screen.
 4. Settings → Add transactions → **Upload a statement** → pick
-   `sample-statement.csv` → show the "Imported" confirmation.
+   `sample-statement.xlsx` → show the "Imported" confirmation.
 5. Back to Home. Show the total, then tap through **Day, Week, Month, Year**.
    Let the category breakdown and the chart render.
 6. **Transactions** tab → tap a row → show edit → change something → Save.
@@ -217,7 +218,7 @@ local `.env` is dead — a plain models-list call returns 401 UNAUTHENTICATED, a
 its prefix is `AQ.A` where Google AI Studio keys begin `AIza`. Production has
 its own key that I cannot read, and the last successful import in production was
 2026-08-29, a month ago. **Test it**: sign in at paisa-tawny.vercel.app, upload
-`public/sample-statement.csv`, confirm transactions appear. If it fails, mint a
+`public/sample-statement.xlsx`, confirm transactions appear. If it fails, mint a
 new key at aistudio.google.com/apikey and update `GOOGLE_GEMINI_API_KEY` in both
 Vercel and `.env`. There is also a stray duplicate `Gemini_API_Key` variable in
 Vercel worth deleting.
@@ -227,6 +228,10 @@ Vercel worth deleting.
 Google — everyone else is refused. The reviewer will use Apple, so this will not
 block review, but it will block real users.
 
-**3. Screenshots must show the app in use.** Guideline 2.3.3 — not the launch
+**3. Attach the .xlsx, not the .csv.** App Store Connect refuses .csv
+attachments. Both files are in `public/` and both import fine — attach
+`sample-statement.xlsx` and give the URL as well.
+
+**4. Screenshots must show the app in use.** Guideline 2.3.3 — not the launch
 screen or the sign-in screen. Take them after importing the sample statement so
 there is real-looking data on screen.
