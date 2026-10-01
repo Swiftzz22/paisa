@@ -15,6 +15,15 @@ import {
 import { normalizeMerchantMatcher } from "@/lib/rules";
 import { getCategoryOptions } from "@/lib/categories";
 
+/**
+ * Headroom to insist on before starting another model call.
+ *
+ * A batch of five takes 9-15s against this endpoint, so 18s leaves room for
+ * a slow one plus the writes that follow. Starting a call with four seconds
+ * left just produces a timeout and marks good mail failed.
+ */
+const PARSE_RESERVE_MS = 18_000;
+
 export type ProcessResult = {
   total: number;
   parsed: number;
@@ -42,11 +51,27 @@ export async function processPendingForUser(
   maxToProcess: number = BATCH_SIZE,
   deadline?: number
 ): Promise<ProcessResult> {
+  // Never-tried mail first, retries only with the capacity left over.
+  //
+  // This was one query over {pending, failed} ordered by receivedAt desc, and
+  // it deadlocked: ten emails failed on 16 September, all of them newer than
+  // the 400 still pending, and BATCH_SIZE is ten — so every run picked exactly
+  // those ten, retried them, failed again, and never reached the backlog. Four
+  // hundred emails sat untouched for a fortnight while the same ten spun.
   const pending = await prisma.receivedEmail.findMany({
-    where: { userId, parseStatus: { in: ["pending", "failed"] } },
+    where: { userId, parseStatus: "pending" },
     orderBy: { receivedAt: "desc" },
     take: maxToProcess,
   });
+  if (pending.length < maxToProcess) {
+    pending.push(
+      ...(await prisma.receivedEmail.findMany({
+        where: { userId, parseStatus: "failed" },
+        orderBy: { receivedAt: "desc" },
+        take: maxToProcess - pending.length,
+      }))
+    );
+  }
 
   if (pending.length === 0) {
     return { total: 0, parsed: 0, ignored: 0, failed: 0, rateLimitedAfter: null };
@@ -118,6 +143,10 @@ export async function processPendingForUser(
 
   // 3. Process in batches
   for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
+    // One batch of ten used to be the whole run, and the cron fires once a
+    // day — so the ceiling was ten emails a day however much time was left.
+    // Keep going while there is room for another model call.
+    if (deadline !== undefined && deadline - Date.now() < PARSE_RESERVE_MS) break;
     const batch = candidates.slice(i, i + BATCH_SIZE);
     const inputs: EmailInput[] = batch.map((e) => ({
       id: e.id,

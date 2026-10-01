@@ -221,6 +221,13 @@ export async function nvidiaJsonObject(
         temperature: 0,
         max_tokens: opts?.maxTokens ?? 4096,
         response_format: { type: "json_object" },
+        // gpt-oss is a reasoning model, and left to itself it thinks at length
+        // about what is a mechanical extraction. Measured on the ten emails
+        // that had been stuck since 16 September: a batch of ten took 47s at
+        // the default effort and 21s at "low", with identical results and half
+        // the completion tokens. Since the call is capped at 25s, the default
+        // meant every full batch timed out and nothing ever drained.
+        reasoning_effort: "low",
       }),
       signal: controller.signal,
     });

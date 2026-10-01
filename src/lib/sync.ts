@@ -194,7 +194,9 @@ export async function runSyncForUser(
     // "not past the deadline" — starting this with two seconds left is how the
     // tick overran even with a budget in place.
     if (isGeminiConfigured() && timeLeft() >= PARSE_RESERVE_MS) {
-      const result = await processPendingForUser(userId, undefined, deadline);
+      // Was BATCH_SIZE, which capped a whole daily run at ten emails. Hand
+      // it a backlog's worth and let the deadline decide where to stop.
+      const result = await processPendingForUser(userId, 60, deadline);
       status.processed.parsed = result.parsed;
       status.processed.ignored = result.ignored;
       status.processed.failed = result.failed;
