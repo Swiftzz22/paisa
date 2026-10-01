@@ -19,7 +19,16 @@ const MIN_INTERVAL_MS = 4500;
 let lastCallAt = 0;
 
 /** Max emails sent in a single Gemini request. */
-export const BATCH_SIZE = 10;
+/**
+ * Emails per model call.
+ *
+ * Ten is too many. With low reasoning effort a batch of ten lands around 21s
+ * against a 25s cap, so roughly one batch in three overran and took nine good
+ * emails down with it — 185 failures across a 450-email drain. Five measures
+ * at 9-15s, which leaves room for a slow one. Fewer emails per call, but a
+ * call that finishes beats a bigger one that does not.
+ */
+export const BATCH_SIZE = 5;
 
 /**
  * Raised when the caller's time budget is spent. Pending emails stay pending,
