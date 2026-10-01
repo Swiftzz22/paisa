@@ -311,6 +311,13 @@ Rules for extraction:
   don't represent a real money movement.
 - amount_inr is the absolute rupee value of the movement (always positive —
   the direction comes from "kind").
+  * Indian digit grouping is lakh/crore, NOT thousands: commas fall after the
+    last three digits and then every two. So "63,60,145.00" is 6360145, not
+    63600145, and "1,23,456" is 123456. Delete the commas and read the digits
+    that remain — never pad a group out to three digits. Getting this wrong
+    turned a 63 lakh fixed deposit into 6.3 crore of spending.
+  * The figure you want is the amount moved, never the "Available Balance" or
+    "available balance in your account", which appears in the same email.
 - merchant: cleaned name of the OTHER party.
    * For debits: where the user paid (e.g. "Swiggy", "Uber", "Big Bazaar").
    * For credits: who paid the user (e.g. "Amazon refund", "Spotify refund",
