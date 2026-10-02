@@ -6,7 +6,7 @@ export const metadata = {
     "What paisa. collects, why, who it is shared with, and how to delete it.",
 };
 
-const UPDATED = "25 August 2026";
+const UPDATED = "2 October 2026";
 
 /**
  * Public privacy policy. Required three times over: App Store Connect demands a
@@ -94,8 +94,8 @@ export default function PrivacyPolicy() {
               Google API Services User Data Policy
             </a>
             , including its Limited Use requirements. That data is never sold,
-            never used for advertising, and never used to train any machine
-            learning model.
+            never used for advertising, and paisa. never uses it to train a
+            machine learning model.
           </p>
           <p className="mt-3">
             You can disconnect Gmail at any time in Settings, or revoke access
@@ -115,14 +115,24 @@ export default function PrivacyPolicy() {
         <Section title="Who else sees your data">
           <p>
             paisa. is run by one person and your data is not sold, rented or
-            shared for marketing. It reaches these companies, all as
-            infrastructure:
+            shared for marketing. It reaches these companies, only to provide
+            the app. The iOS app asks for your permission, and names the two AI
+            services, before sending anything to either of them, and you can
+            withdraw that permission in Settings at any time:
           </p>
-          <Item label="An AI provider">
-            The contents of a bank alert are sent to a language model to extract
-            the merchant, amount and category, and your spending totals are sent
-            when you use Ask. The provider is contractually barred from training
-            on it.
+          <Item label="Google (Gemini API)">
+            The contents of a statement you upload, to find and extract each
+            transaction in it.
+          </Item>
+          <Item label="NVIDIA (hosted AI inference)">
+            The text of each bank or UPI alert, to read the amount, merchant and
+            category; statement contents, as a first attempt at reading them;
+            and, when you use Ask, your question with the transactions needed
+            to answer it.
+          </Item>
+          <Item label="RevenueCat">
+            Your account ID and purchase history, to manage a paisa. plus
+            subscription. Payment itself is handled by Apple.
           </Item>
           <Item label="Vercel">
             Runs the servers.
