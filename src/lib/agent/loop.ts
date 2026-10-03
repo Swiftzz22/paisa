@@ -276,6 +276,13 @@ async function nvidiaChat(
         tools: OPENAI_TOOLS,
         temperature: 0,
         max_tokens: 1024,
+        // gpt-oss reasons at length by default, and its reasoning counts
+        // against max_tokens. Here that risked both halves of a failure: a
+        // call outlasting CALL_TIMEOUT_MS, or a long think using up the 1,024
+        // tokens and leaving no answer at all. Looking up someone's spending
+        // and summing it doesn't need deliberation. The parser made the same
+        // change and went from 47s to about 10s per batch.
+        reasoning_effort: "low",
       }),
       signal: controller.signal,
     });

@@ -23,6 +23,25 @@ const RequestBody = z.object({
     .optional(),
 });
 
+/**
+ * The model writes Markdown — **bold**, # headings, - bullets — and the app
+ * shows answers as plain text, so the symbols came through literally: a
+ * reviewer saw "**₹62,400.00**" with the asterisks still on. Strip the syntax
+ * and keep the words. Done here rather than in the agent because the website
+ * renders the same answers and is free to keep the formatting.
+ */
+function plainText(answer: string): string {
+  return answer
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, "$1 ($2)")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*]\s+/gm, "• ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /** Bearer-authed "Ask paisa" chat for the native app. Mirrors /api/ask. */
 export async function POST(req: NextRequest) {
   const user = await getMobileUser(req.headers.get("authorization"));
@@ -60,7 +79,7 @@ export async function POST(req: NextRequest) {
       userMessage: parsed.data.message,
     });
     await consume(user.id, "ask", tz);
-    return Response.json({ answer: result.answer });
+    return Response.json({ answer: plainText(result.answer) });
   } catch (e) {
     if (e instanceof GeminiRateLimitError) {
       return Response.json(
