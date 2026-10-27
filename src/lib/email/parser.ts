@@ -7,7 +7,8 @@ import { GoogleGenAI } from "@google/genai";
 // (multimodal PDF/image) and bring their own client + callGeminiWithBackoff.
 // Bank-alert extraction falls back to Gemini when NVIDIA is unavailable — see
 // jsonArrayWithFallback.
-// Keep in sync with the model in lib/agent/loop.ts — see the note there on
+// Not the same model as lib/agent/loop.ts any more: the one Ask moved to
+// (nemotron-3.5-lightning) read ₹20.00 as 2000 here. See the note there on
 // NVIDIA pulling serving capacity from models it still lists.
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const NVIDIA_MODEL = "openai/gpt-oss-20b";

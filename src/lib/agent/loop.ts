@@ -16,11 +16,14 @@ const EXPECTED_KEYS: Record<string, readonly string[]> = Object.fromEntries(
 // stable: meta/llama-3.1-8b-instruct stopped serving entirely (every
 // completions call hung past 30s while /v1/models still listed it), and
 // llama-3.3-70b and the nemotron-nano-8b variants time out the same way.
-// gpt-oss-20b answers in well under a second with clean OpenAI-format tool
-// calls; mistralai/mistral-nemotron is the verified backup if this one goes
-// dark. If the agent starts timing out again, re-test before assuming the key.
+// gpt-oss-20b went the same way on 26 Oct 2026, and mistral-nemotron (the old
+// backup) now returns 410. nemotron-3.5-lightning was the only listed model
+// still serving; on the local eval questions it made the right tool calls and
+// matched SQL totals exactly, at 1-3s a call. It is NOT used by the email
+// parser: there it dropped decimal points (₹20.00 read as 2000). If the agent
+// starts timing out again, re-test before assuming the key.
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const MODEL = "openai/gpt-oss-20b";
+const MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b";
 /** Per-call cap so a rare slow/queued response can't eat the whole 60s budget. */
 const CALL_TIMEOUT_MS = 18_000;
 // Each step is one model round-trip. Most questions resolve in 2–3.
@@ -276,13 +279,13 @@ async function nvidiaChat(
         tools: OPENAI_TOOLS,
         temperature: 0,
         max_tokens: 1024,
-        // gpt-oss reasons at length by default, and its reasoning counts
+        // Nemotron reasons at length by default, and its reasoning counts
         // against max_tokens. Here that risked both halves of a failure: a
         // call outlasting CALL_TIMEOUT_MS, or a long think using up the 1,024
-        // tokens and leaving no answer at all. Looking up someone's spending
-        // and summing it doesn't need deliberation. The parser made the same
-        // change and went from 47s to about 10s per batch.
-        reasoning_effort: "low",
+        // tokens and leaving no answer at all (measured: 512 tokens of thinking
+        // and null content on a one-line prompt). Looking up someone's spending
+        // and summing it doesn't need deliberation, so thinking is off.
+        chat_template_kwargs: { enable_thinking: false },
       }),
       signal: controller.signal,
     });
