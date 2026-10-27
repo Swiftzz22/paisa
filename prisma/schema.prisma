@@ -56,6 +56,8 @@ model User {
   passkeys            Passkey[]
   mobileAuthCodes     MobileAuthCode[]
   usageCounters       UsageCounter[]
+  people              Person[]
+  settlements         Settlement[]
 }
 
 /// UNUSED, and empty. Left declared for the same reason as User.plusUntil: the
@@ -216,14 +218,98 @@ model Transaction {
   importBatchId String?
   emailId       String?
   createdAt     DateTime @default(now())
+  // Foreign-currency spend (paisa. plus). `amount` stays in INR so every total,
+  // chart and budget keeps working untouched; these record what was actually
+  // on the receipt and the rate that turned it into rupees. The rate is the one
+  // for the day of purchase and is frozen here, so the total never drifts as
+  // rates move. All null for an ordinary rupee transaction.
+  originalAmount   Decimal?
+  originalCurrency String?
+  fxRate           Decimal? // INR per one unit of originalCurrency
+  fxRateDate       String? // YYYY-MM-DD the rate is from (can precede the purchase on weekends)
+  // Bill splitting (paisa. plus). A split expense keeps `amount` as *your
+  // share*, so every total, chart and budget counts only what you actually
+  // spent with no change to any of them. The whole bill lives here. All null
+  // for an expense nobody shared.
+  splitTotal     Decimal?
+  splitMode      String? // equal | exact | percent | shares | items — for re-editing
+  // null = you paid; otherwise the Person who did. Deliberately a plain column
+  // with no foreign key: in SQLite a new FK column means rebuilding the whole
+  // Transaction table, which is not a risk worth taking on live data for a
+  // check the split code makes anyway (the person must be the user's own).
+  paidByPersonId String?
 
   user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   importBatch ImportBatch?   @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   email       ReceivedEmail? @relation(fields: [emailId], references: [id], onDelete: SetNull)
   lines       ExpenseLine[]
+  shares      SplitShare[]
 
   @@unique([userId, externalId])
   @@index([userId, occurredAt])
+}
+
+// Someone you split bills with. Just a name (and optionally a phone or UPI id
+// for settling up) — not an account, never contacted by paisa.
+model Person {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String
+  phone     String?
+  upiId     String?
+  // Hidden from pickers but kept, since past splits still name them.
+  archived  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shares      SplitShare[]
+  settlements Settlement[]
+
+  @@index([userId])
+}
+
+// One person's part of a split expense. personId null = your own share.
+model SplitShare {
+  id            String  @id @default(uuid())
+  transactionId String
+  personId      String?
+  amount        Decimal // INR, allocated to the paisa; shares sum to splitTotal
+  weight        Decimal // what was entered (an amount, a percentage, a share count)
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  person      Person?     @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@index([transactionId])
+  @@index([personId])
+}
+
+// Money that moved to square up: you paid them ("paid") or they paid you
+// ("received"). Not a Transaction, so it never counts as spending or income.
+model Settlement {
+  id         String   @id @default(uuid())
+  userId     String
+  personId   String
+  amount     Decimal
+  direction  String // paid | received
+  occurredAt DateTime @default(now())
+  note       String?
+  createdAt  DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person Person @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([personId])
+}
+
+// One day's exchange rates, fetched once and kept forever — a past day's rates
+// never change, so after the first lookup a date costs nothing to answer.
+// `rates` is JSON: { "USD": 0.0119, ... } meaning one rupee buys that much.
+model FxRateDay {
+  date      String   @id // YYYY-MM-DD, as reported by the source
+  rates     String
+  source    String
+  fetchedAt DateTime @default(now())
 }
 
 model ExpenseLine {

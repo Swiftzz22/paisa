@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { getBudgetProgress, getMonthOverMonthDelta } from "@/lib/budgets";
 import { getRangeSummary } from "@/lib/spending";
 import { clampTzOffset, hasKnownTime, monthRange } from "@/lib/time";
+import { paywallEnabled } from "@/lib/billing";
+import { SPLIT_INCLUDE, serializeSplit } from "@/lib/splits";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,7 +39,7 @@ export async function GET(req: NextRequest) {
       where: { userId: user.id },
       orderBy: { occurredAt: "desc" },
       take: 12,
-      include: { lines: { include: { category: { include: { parent: true } } } } },
+      include: { lines: { include: { category: { include: { parent: true } } } }, ...SPLIT_INCLUDE },
     }),
   ]);
 
@@ -63,6 +65,18 @@ export async function GET(req: NextRequest) {
       paymentMode: t.paymentMode,
       occurredAt: t.occurredAt.toISOString(),
       timeKnown: hasKnownTime(t.occurredAt, t.source),
+      // Same shape as the transactions endpoint, so editing from Home opens a
+      // foreign expense in the currency it was paid in.
+      original:
+        t.originalCurrency && t.originalAmount != null
+          ? {
+              amount: Number(t.originalAmount),
+              currency: t.originalCurrency,
+              rate: Number(t.fxRate),
+              rateDate: t.fxRateDate,
+            }
+          : null,
+      split: serializeSplit(t),
     };
   });
 
@@ -79,6 +93,7 @@ export async function GET(req: NextRequest) {
     where: { id: user.id },
     select: { appleSub: true, plusUntil: true },
   });
+  const hasPlus = Boolean(account?.plusUntil && account.plusUntil.getTime() > Date.now());
 
   return Response.json({
     user: {
@@ -92,9 +107,12 @@ export async function GET(req: NextRequest) {
       // So Settings and the paywall sheet can show the right state without a
       // second request. Derived here rather than sent as a date, because the
       // app has no business interpreting an expiry.
-      plus: Boolean(
-        account?.plusUntil && account.plusUntil.getTime() > Date.now()
-      ),
+      plus: hasPlus,
+      // Whether Plus features are open to this person right now — true for
+      // everyone while the paywall is switched off. `plus` above answers "are
+      // they paying"; this answers "may they use it", which is what features
+      // that run entirely on the phone (receipt scanning) have to ask.
+      plusAccess: paywallEnabled() ? hasPlus : true,
     },
     emailConnected: emailAccounts.length > 0,
     connectedEmails: emailAccounts.map((a) => a.accountEmail),
