@@ -6,7 +6,7 @@ export const metadata = {
     "What paisa. collects, why, who it is shared with, and how to delete it.",
 };
 
-const UPDATED = "2 October 2026";
+const UPDATED = "27 October 2026";
 
 /**
  * Public privacy policy. Required three times over: App Store Connect demands a
@@ -56,7 +56,23 @@ export default function PrivacyPolicy() {
           <Item label="Your transactions">
             Merchant, amount, date, payment method, category, and any notes you
             add — whether they came from an email, a statement you uploaded, or
-            were typed in by hand.
+            were typed in by hand. For an expense in another currency, the
+            amount on the receipt and the exchange rate used to convert it.
+          </Item>
+          <Item label="Receipts you scan">
+            Photos of receipts are read on your iPhone, using its built-in text
+            recognition, and are never uploaded or stored. Only the details you
+            save (amount, merchant, date, currency) reach paisa. If a receipt
+            can&rsquo;t be read and you choose to use AI, the text recognised
+            from it, never the photo, is sent once to Google&rsquo;s Gemini API
+            and not kept afterwards.
+          </Item>
+          <Item label="People you split with">
+            The names you type for people you share expenses with, and a phone
+            number or UPI ID if you add one, along with how each bill was split
+            and what has been settled. paisa. never contacts these people.
+            Paying someone opens your own UPI app; paisa. does not handle the
+            money.
           </Item>
           <Item label="What you ask">
             Questions you put to the Ask feature, and the answers.
@@ -122,7 +138,9 @@ export default function PrivacyPolicy() {
           </p>
           <Item label="Google (Gemini API)">
             The contents of a statement you upload, to find and extract each
-            transaction in it.
+            transaction in it; and, only when you ask for help with a receipt
+            your iPhone couldn&rsquo;t read, the text recognised from that
+            receipt.
           </Item>
           <Item label="NVIDIA (hosted AI inference)">
             The text of each bank or UPI alert, to read the amount, merchant and
