@@ -138,13 +138,16 @@ export default function PrivacyPolicy() {
           </p>
           <Item label="Google (Gemini API)">
             The contents of a statement you upload, to find and extract each
-            transaction in it; and, only when you ask for help with a receipt
-            your iPhone couldn&rsquo;t read, the text recognised from that
-            receipt.
+            transaction in it; the text of a bank or UPI alert, only when
+            NVIDIA is unavailable and Gemini reads it instead; and, only when
+            you ask for help with a receipt your iPhone couldn&rsquo;t read,
+            the text recognised from that receipt.
           </Item>
           <Item label="NVIDIA (hosted AI inference)">
             The text of each bank or UPI alert, to read the amount, merchant and
-            category; statement contents, as a first attempt at reading them;
+            category (if NVIDIA is down, that alert goes to Google&rsquo;s
+            Gemini API instead); statement contents, as a first attempt at
+            reading them;
             and, when you use Ask, your question with the transactions needed
             to answer it.
           </Item>

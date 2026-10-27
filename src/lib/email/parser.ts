@@ -1,9 +1,12 @@
 import "server-only";
+import { GoogleGenAI } from "@google/genai";
 
 // Email extraction + recategorize run on NVIDIA's free OpenAI-compatible API
 // (build.nvidia.com), the same place the chat moved to — Gemini's free tier
 // kept rate-limiting. The statement importers still use Gemini directly
 // (multimodal PDF/image) and bring their own client + callGeminiWithBackoff.
+// Bank-alert extraction falls back to Gemini when NVIDIA is unavailable — see
+// jsonArrayWithFallback.
 // Keep in sync with the model in lib/agent/loop.ts — see the note there on
 // NVIDIA pulling serving capacity from models it still lists.
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
@@ -11,7 +14,26 @@ const NVIDIA_MODEL = "openai/gpt-oss-20b";
 // Was 45s, which on its own could consume a whole sync tick's budget and get
 // the function killed. A healthy call returns in a couple of seconds; this is
 // only a guard against the model going unresponsive, as llama-3.1-8b did.
-const NVIDIA_TIMEOUT_MS = 25_000;
+// Overridable only so scripts/test-email-fallback.mts can time out quickly.
+const NVIDIA_TIMEOUT_MS = Number(process.env.NVIDIA_TIMEOUT_MS) || 25_000;
+
+// Fallback for bank-alert extraction when NVIDIA is down (timeouts, 5xx) or
+// has retired the model (410 Gone). On 26-27 Oct 2026 every call timed out
+// for two days and no alerts were parsed. Same model as statement-universal.
+const GEMINI_FALLBACK_MODEL = "gemini-2.5-flash";
+const GEMINI_FALLBACK_TIMEOUT_MS = 20_000;
+/** Below this there is no point starting a fallback call; leave it pending. */
+const GEMINI_FALLBACK_MIN_MS = 5_000;
+/**
+ * After NVIDIA fails, skip it for a while and go straight to Gemini. Without
+ * this an outage costs a full 25s timeout per batch before every fallback,
+ * which is most of a sync tick. A retired model (410) won't come back, so it
+ * is skipped for longer. Module state, so it only lasts while the instance is
+ * warm — enough to stop one tick paying the timeout over and over.
+ */
+const NVIDIA_COOLDOWN_MS = 10 * 60_000;
+const NVIDIA_GONE_COOLDOWN_MS = 6 * 60 * 60_000;
+let nvidiaSkipUntil = 0;
 
 // Throttle between calls. With batching of up to BATCH_SIZE emails per call,
 // 4.5s between calls = ~13 calls/min × 5 emails = ~65 emails/min effective.
@@ -82,6 +104,22 @@ export class GeminiRateLimitError extends Error {
   constructor(public retryAfterSeconds: number) {
     super(`Gemini rate limited; retry after ${retryAfterSeconds}s`);
     this.name = "GeminiRateLimitError";
+  }
+}
+
+/**
+ * NVIDIA could not answer at all: timed out, network failure, 5xx, or 410
+ * (model retired). Callers that have another provider fall back on this; it
+ * is still an Error with the same message as before for everyone else. 429 is
+ * deliberately not one of these — that stays a GeminiRateLimitError.
+ */
+export class NvidiaUnavailableError extends Error {
+  constructor(
+    message: string,
+    public reason: "timeout" | "network" | "server" | "gone"
+  ) {
+    super(message);
+    this.name = "NvidiaUnavailableError";
   }
 }
 
@@ -242,11 +280,13 @@ export async function nvidiaJsonObject(
     });
   } catch (e) {
     if (controller.signal.aborted) {
-      throw new Error(
-        `NVIDIA request timed out after ${Math.round(budget / 1000)}s.`
+      throw new NvidiaUnavailableError(
+        `NVIDIA request timed out after ${Math.round(budget / 1000)}s.`,
+        "timeout"
       );
     }
-    throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new NvidiaUnavailableError(`NVIDIA request failed: ${msg}`, "network");
   } finally {
     clearTimeout(timer);
   }
@@ -256,7 +296,10 @@ export async function nvidiaJsonObject(
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`NVIDIA API ${res.status}: ${text.slice(0, 400)}`);
+    const message = `NVIDIA API ${res.status}: ${text.slice(0, 400)}`;
+    if (res.status === 410) throw new NvidiaUnavailableError(message, "gone");
+    if (res.status >= 500) throw new NvidiaUnavailableError(message, "server");
+    throw new Error(message);
   }
   const data = await res.json();
   const content: string = data?.choices?.[0]?.message?.content ?? "";
@@ -286,12 +329,130 @@ async function nvidiaJsonArray(
   deadline?: number
 ): Promise<unknown[]> {
   const parsed = await nvidiaJsonObject(systemPrompt, userContent, { deadline });
+  return unwrapResults(parsed);
+}
+
+function unwrapResults(parsed: unknown): unknown[] {
   if (Array.isArray(parsed)) return parsed;
   const obj = (parsed ?? {}) as Record<string, unknown>;
   for (const key of ["results", "transactions", "items", "data"]) {
     if (Array.isArray(obj[key])) return obj[key] as unknown[];
   }
   return [parsed];
+}
+
+/**
+ * The same prompt and `{ "results": [...] }` shape, answered by Gemini. Only
+ * used as the fallback when NVIDIA is unavailable. A persistent 429 surfaces
+ * as GeminiRateLimitError via callGeminiWithBackoff, like everywhere else.
+ */
+async function geminiJsonArray(
+  systemPrompt: string,
+  userContent: string,
+  deadline?: number
+): Promise<unknown[]> {
+  const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GOOGLE_GEMINI_API_KEY is not set.");
+  const budget =
+    deadline === undefined
+      ? GEMINI_FALLBACK_TIMEOUT_MS
+      : Math.min(GEMINI_FALLBACK_TIMEOUT_MS, deadline - Date.now() - 2_000);
+  if (budget < GEMINI_FALLBACK_MIN_MS) throw new OutOfTimeError();
+  const callDeadline = Date.now() + budget;
+
+  const ai = new GoogleGenAI({ apiKey });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), budget);
+  try {
+    const response = await callGeminiWithBackoff(
+      () =>
+        ai.models.generateContent({
+          model: GEMINI_FALLBACK_MODEL,
+          contents: [{ role: "user", parts: [{ text: userContent }] }],
+          config: {
+            systemInstruction: systemPrompt,
+            responseMimeType: "application/json",
+            temperature: 0,
+            thinkingConfig: { thinkingBudget: 0 },
+            abortSignal: controller.signal,
+          },
+        }),
+      // A different provider from the NVIDIA call just made, so no spacing.
+      { deadline: callDeadline, minIntervalMs: 0, maxAttempts: 2 }
+    );
+    const content = response.text ?? "";
+    if (!content) throw new Error("Gemini returned no content.");
+    return unwrapResults(JSON.parse(content));
+  } catch (e) {
+    if (controller.signal.aborted) {
+      throw new Error(`Gemini request timed out after ${Math.round(budget / 1000)}s.`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * NVIDIA first; Gemini when NVIDIA is unavailable. Logs which provider
+ * answered so an outage shows up in the Vercel logs.
+ */
+async function jsonArrayWithFallback(
+  systemPrompt: string,
+  userContent: string,
+  opts: { deadline?: number; label: string }
+): Promise<unknown[]> {
+  const { deadline, label } = opts;
+  let nvidiaError: NvidiaUnavailableError | null = null;
+
+  if (Date.now() >= nvidiaSkipUntil) {
+    const startedAt = Date.now();
+    try {
+      const rows = await nvidiaJsonArray(systemPrompt, userContent, deadline);
+      console.log(
+        `[email-parse] ${label}: provider=nvidia model=${NVIDIA_MODEL} ${Date.now() - startedAt}ms`
+      );
+      return rows;
+    } catch (e) {
+      // 429, OutOfTimeError and bad answers are not outages: no fallback.
+      if (!(e instanceof NvidiaUnavailableError)) throw e;
+      nvidiaError = e;
+      nvidiaSkipUntil =
+        Date.now() + (e.reason === "gone" ? NVIDIA_GONE_COOLDOWN_MS : NVIDIA_COOLDOWN_MS);
+      console.warn(
+        `[email-parse] ${label}: nvidia unavailable (${e.reason}): ${e.message} — falling back to gemini`
+      );
+    }
+  } else {
+    console.log(
+      `[email-parse] ${label}: skipping nvidia (unavailable recently, retry after ${new Date(nvidiaSkipUntil).toISOString()})`
+    );
+  }
+
+  if (!process.env.GOOGLE_GEMINI_API_KEY) {
+    throw nvidiaError ?? new Error("NVIDIA is unavailable and GOOGLE_GEMINI_API_KEY is not set.");
+  }
+  const startedAt = Date.now();
+  try {
+    const rows = await geminiJsonArray(systemPrompt, userContent, deadline);
+    console.log(
+      `[email-parse] ${label}: provider=gemini model=${GEMINI_FALLBACK_MODEL} (fallback) ${Date.now() - startedAt}ms`
+    );
+    return rows;
+  } catch (e) {
+    if (e instanceof OutOfTimeError || e instanceof GeminiRateLimitError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[email-parse] ${label}: gemini fallback failed: ${msg}`);
+    // Both messages end up in parseError, which is what you want to read.
+    throw new Error(
+      `${nvidiaError ? nvidiaError.message : "NVIDIA skipped (recently unavailable)."} Gemini fallback failed: ${msg}`
+    );
+  }
+}
+
+/** For tests: forget that NVIDIA was unavailable. */
+export function resetProviderStateForTests(): void {
+  nvidiaSkipUntil = 0;
 }
 
 const BASE_PROMPT = `You are extracting Indian bank, UPI, or credit/debit card transaction
@@ -382,11 +543,10 @@ export async function extractTransactionBatch(params: {
     labels.join("\n"),
   ].join("\n");
 
-  const rawArray = (await nvidiaJsonArray(
-    BASE_PROMPT,
-    userContent,
-    params.deadline
-  )) as BatchExtraction[];
+  const rawArray = (await jsonArrayWithFallback(BASE_PROMPT, userContent, {
+    deadline: params.deadline,
+    label: `batch of ${params.emails.length}`,
+  })) as BatchExtraction[];
 
   // Only ids we actually sent are accepted. Without this, an id conjured from
   // injected body text could attach a fabricated transaction to another email.
