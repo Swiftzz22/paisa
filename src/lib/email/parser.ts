@@ -18,10 +18,19 @@ const NVIDIA_MODEL = "openai/gpt-oss-20b";
 // Overridable only so scripts/test-email-fallback.mts can time out quickly.
 const NVIDIA_TIMEOUT_MS = Number(process.env.NVIDIA_TIMEOUT_MS) || 25_000;
 
-// Fallback for bank-alert extraction when NVIDIA is down (timeouts, 5xx) or
-// has retired the model (410 Gone). On 26-27 Oct 2026 every call timed out
-// for two days and no alerts were parsed. Same model as statement-universal.
+// The second provider for bank-alert extraction and recategorize. On 26-27
+// Oct 2026 every NVIDIA call timed out for two days and no alerts were parsed.
+// Same model as statement-universal.
 const GEMINI_FALLBACK_MODEL = "gemini-2.5-flash";
+/**
+ * Which provider is tried first. Gemini while NVIDIA's gpt-oss-20b is down
+ * (since 26 Oct 2026); set EMAIL_AI_PRIMARY=nvidia in Vercel and redeploy to
+ * put NVIDIA back in front once it answers again. Read per call so a test can
+ * flip it.
+ */
+function primaryProvider(): "gemini" | "nvidia" {
+  return process.env.EMAIL_AI_PRIMARY === "nvidia" ? "nvidia" : "gemini";
+}
 const GEMINI_FALLBACK_TIMEOUT_MS = 20_000;
 /** Below this there is no point starting a fallback call; leave it pending. */
 const GEMINI_FALLBACK_MIN_MS = 5_000;
@@ -223,9 +232,10 @@ export type CategoryChoice = {
 };
 
 export function isGeminiConfigured(): boolean {
-  // Email extraction + recategorize now run on NVIDIA (build.nvidia.com), so
-  // this checks the NVIDIA key. (Name kept so the 5 call sites don't churn.)
-  return Boolean(process.env.NVIDIA_API_KEY);
+  // Email extraction + recategorize run on Gemini or NVIDIA (whichever is
+  // primary, with the other as fallback), so either key is enough. (Name kept
+  // so the 5 call sites don't churn.)
+  return Boolean(process.env.GOOGLE_GEMINI_API_KEY || process.env.NVIDIA_API_KEY);
 }
 
 /**
@@ -343,14 +353,15 @@ function unwrapResults(parsed: unknown): unknown[] {
 }
 
 /**
- * The same prompt and `{ "results": [...] }` shape, answered by Gemini. Only
- * used as the fallback when NVIDIA is unavailable. A persistent 429 surfaces
- * as GeminiRateLimitError via callGeminiWithBackoff, like everywhere else.
+ * The same prompt and `{ "results": [...] }` shape, answered by Gemini. A
+ * persistent 429 surfaces as GeminiRateLimitError via callGeminiWithBackoff,
+ * like everywhere else.
  */
 async function geminiJsonArray(
   systemPrompt: string,
   userContent: string,
-  deadline?: number
+  deadline: number | undefined,
+  minIntervalMs: number
 ): Promise<unknown[]> {
   const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_GEMINI_API_KEY is not set.");
@@ -378,8 +389,7 @@ async function geminiJsonArray(
             abortSignal: controller.signal,
           },
         }),
-      // A different provider from the NVIDIA call just made, so no spacing.
-      { deadline: callDeadline, minIntervalMs: 0, maxAttempts: 2 }
+      { deadline: callDeadline, minIntervalMs, maxAttempts: 2 }
     );
     const content = response.text ?? "";
     if (!content) throw new Error("Gemini returned no content.");
@@ -395,8 +405,93 @@ async function geminiJsonArray(
 }
 
 /**
- * NVIDIA first; Gemini when NVIDIA is unavailable. Logs which provider
- * answered so an outage shows up in the Vercel logs.
+ * NVIDIA, tried if it hasn't failed recently. Returns null when the caller
+ * should move on to Gemini: NVIDIA is unavailable (timeout, network, 5xx,
+ * 410), in its cooldown, or has no key. 429, OutOfTimeError and bad answers
+ * are not outages and are thrown.
+ */
+async function tryNvidia(
+  systemPrompt: string,
+  userContent: string,
+  deadline: number | undefined,
+  label: string,
+  role: "primary" | "fallback",
+  errors: string[]
+): Promise<unknown[] | null> {
+  if (!process.env.NVIDIA_API_KEY) {
+    errors.push("NVIDIA_API_KEY is not set.");
+    return null;
+  }
+  if (Date.now() < nvidiaSkipUntil) {
+    console.log(
+      `[email-parse] ${label}: skipping nvidia (unavailable recently, retry after ${new Date(nvidiaSkipUntil).toISOString()})`
+    );
+    errors.push("NVIDIA skipped (recently unavailable).");
+    return null;
+  }
+  const startedAt = Date.now();
+  try {
+    const rows = await nvidiaJsonArray(systemPrompt, userContent, deadline);
+    console.log(
+      `[email-parse] ${label}: provider=nvidia model=${NVIDIA_MODEL} (${role}) ${Date.now() - startedAt}ms`
+    );
+    return rows;
+  } catch (e) {
+    if (!(e instanceof NvidiaUnavailableError)) throw e;
+    nvidiaSkipUntil =
+      Date.now() + (e.reason === "gone" ? NVIDIA_GONE_COOLDOWN_MS : NVIDIA_COOLDOWN_MS);
+    console.warn(`[email-parse] ${label}: nvidia unavailable (${e.reason}): ${e.message}`);
+    errors.push(e.message);
+    return null;
+  }
+}
+
+/**
+ * Gemini. Returns null when the caller should move on to NVIDIA: no key, or
+ * Gemini failed for a reason other than a rate limit or the clock. A 429 is
+ * thrown as GeminiRateLimitError (the batch stays pending), never retried on
+ * the other provider.
+ */
+async function tryGemini(
+  systemPrompt: string,
+  userContent: string,
+  deadline: number | undefined,
+  label: string,
+  role: "primary" | "fallback",
+  errors: string[]
+): Promise<unknown[] | null> {
+  if (!process.env.GOOGLE_GEMINI_API_KEY) {
+    errors.push("GOOGLE_GEMINI_API_KEY is not set.");
+    return null;
+  }
+  const startedAt = Date.now();
+  try {
+    // As primary it's called batch after batch, so keep the usual spacing to
+    // stay under the free tier's per-minute limit. As a fallback the previous
+    // call went to NVIDIA, so there is nothing to space from.
+    const rows = await geminiJsonArray(
+      systemPrompt,
+      userContent,
+      deadline,
+      role === "primary" ? MIN_INTERVAL_MS : 0
+    );
+    console.log(
+      `[email-parse] ${label}: provider=gemini model=${GEMINI_FALLBACK_MODEL} (${role}) ${Date.now() - startedAt}ms`
+    );
+    return rows;
+  } catch (e) {
+    if (e instanceof OutOfTimeError || e instanceof GeminiRateLimitError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[email-parse] ${label}: gemini failed: ${msg}`);
+    errors.push(`Gemini failed: ${msg}`);
+    return null;
+  }
+}
+
+/**
+ * The primary provider (see primaryProvider), then the other one if the first
+ * is unavailable. Logs which provider answered each batch so an outage shows
+ * up in the Vercel logs.
  */
 async function jsonArrayWithFallback(
   systemPrompt: string,
@@ -404,51 +499,22 @@ async function jsonArrayWithFallback(
   opts: { deadline?: number; label: string }
 ): Promise<unknown[]> {
   const { deadline, label } = opts;
-  let nvidiaError: NvidiaUnavailableError | null = null;
-
-  if (Date.now() >= nvidiaSkipUntil) {
-    const startedAt = Date.now();
-    try {
-      const rows = await nvidiaJsonArray(systemPrompt, userContent, deadline);
-      console.log(
-        `[email-parse] ${label}: provider=nvidia model=${NVIDIA_MODEL} ${Date.now() - startedAt}ms`
-      );
-      return rows;
-    } catch (e) {
-      // 429, OutOfTimeError and bad answers are not outages: no fallback.
-      if (!(e instanceof NvidiaUnavailableError)) throw e;
-      nvidiaError = e;
-      nvidiaSkipUntil =
-        Date.now() + (e.reason === "gone" ? NVIDIA_GONE_COOLDOWN_MS : NVIDIA_COOLDOWN_MS);
-      console.warn(
-        `[email-parse] ${label}: nvidia unavailable (${e.reason}): ${e.message} — falling back to gemini`
-      );
-    }
-  } else {
-    console.log(
-      `[email-parse] ${label}: skipping nvidia (unavailable recently, retry after ${new Date(nvidiaSkipUntil).toISOString()})`
+  const errors: string[] = [];
+  const order = primaryProvider() === "gemini" ? [tryGemini, tryNvidia] : [tryNvidia, tryGemini];
+  for (const [i, attempt] of order.entries()) {
+    const rows = await attempt(
+      systemPrompt,
+      userContent,
+      deadline,
+      label,
+      i === 0 ? "primary" : "fallback",
+      errors
     );
+    if (rows) return rows;
   }
-
-  if (!process.env.GOOGLE_GEMINI_API_KEY) {
-    throw nvidiaError ?? new Error("NVIDIA is unavailable and GOOGLE_GEMINI_API_KEY is not set.");
-  }
-  const startedAt = Date.now();
-  try {
-    const rows = await geminiJsonArray(systemPrompt, userContent, deadline);
-    console.log(
-      `[email-parse] ${label}: provider=gemini model=${GEMINI_FALLBACK_MODEL} (fallback) ${Date.now() - startedAt}ms`
-    );
-    return rows;
-  } catch (e) {
-    if (e instanceof OutOfTimeError || e instanceof GeminiRateLimitError) throw e;
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error(`[email-parse] ${label}: gemini fallback failed: ${msg}`);
-    // Both messages end up in parseError, which is what you want to read.
-    throw new Error(
-      `${nvidiaError ? nvidiaError.message : "NVIDIA skipped (recently unavailable)."} Gemini fallback failed: ${msg}`
-    );
-  }
+  console.error(`[email-parse] ${label}: no provider answered: ${errors.join(" ")}`);
+  // Both messages end up in parseError, which is what you want to read.
+  throw new Error(errors.join(" "));
 }
 
 /** For tests: forget that NVIDIA was unavailable. */
@@ -625,9 +691,11 @@ one entry per input merchant, in the same order — each entry
     labels.join("\n"),
   ].join("\n");
 
-  // nvidiaJsonArray fails fast on a 429 (throws GeminiRateLimitError), which the
+  // A 429 from either provider throws GeminiRateLimitError, which the
   // recategorize caller reports gracefully.
-  const arr = (await nvidiaJsonArray(prompt, userContent)) as Array<{
+  const arr = (await jsonArrayWithFallback(prompt, userContent, {
+    label: `recategorize ${params.merchants.length} merchants`,
+  })) as Array<{
     merchant: string;
     category_label: string;
   }>;

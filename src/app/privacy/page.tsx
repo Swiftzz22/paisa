@@ -137,19 +137,19 @@ export default function PrivacyPolicy() {
             withdraw that permission in Settings at any time:
           </p>
           <Item label="Google (Gemini API)">
-            The contents of a statement you upload, to find and extract each
-            transaction in it; the text of a bank or UPI alert, only when
-            NVIDIA is unavailable and Gemini reads it instead; and, only when
-            you ask for help with a receipt your iPhone couldn&rsquo;t read,
-            the text recognised from that receipt.
+            The text of each bank or UPI alert, to read the amount, merchant
+            and category, and merchant names, to suggest a category. These go
+            to Gemini or NVIDIA, whichever is working at the time, and to the
+            other only if the first can&rsquo;t answer. Also the contents of a
+            statement you upload, to find and extract each transaction in it;
+            and, only when you ask for help with a receipt your iPhone
+            couldn&rsquo;t read, the text recognised from that receipt.
           </Item>
           <Item label="NVIDIA (hosted AI inference)">
-            The text of each bank or UPI alert, to read the amount, merchant and
-            category (if NVIDIA is down, that alert goes to Google&rsquo;s
-            Gemini API instead); statement contents, as a first attempt at
-            reading them;
-            and, when you use Ask, your question with the transactions needed
-            to answer it.
+            The text of bank or UPI alerts and merchant names, when it is the
+            service handling them (see Google, above); statement contents, as
+            a first attempt at reading them; and, when you use Ask, your
+            question with the transactions needed to answer it.
           </Item>
           <Item label="RevenueCat">
             Your account ID and purchase history, to manage a paisa. plus
