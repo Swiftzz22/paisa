@@ -3,9 +3,9 @@ import { getMobileUser } from "@/lib/auth/mobile";
 import { prisma } from "@/lib/prisma";
 import { getBudgetProgress, getMonthOverMonthDelta } from "@/lib/budgets";
 import { getRangeSummary } from "@/lib/spending";
-import { clampTzOffset, hasKnownTime, monthRange } from "@/lib/time";
+import { clampTzOffset, monthRange } from "@/lib/time";
 import { paywallEnabled } from "@/lib/billing";
-import { SPLIT_INCLUDE, serializeSplit } from "@/lib/splits";
+import { MOBILE_TXN_INCLUDE, toMobileTxn } from "@/lib/mobile-txn";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
       where: { userId: user.id },
       orderBy: { occurredAt: "desc" },
       take: 12,
-      include: { lines: { include: { category: { include: { parent: true } } } }, ...SPLIT_INCLUDE },
+      include: MOBILE_TXN_INCLUDE,
     }),
   ]);
 
@@ -52,33 +52,7 @@ export async function GET(req: NextRequest) {
     color: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
   }));
 
-  const recentTxns = recent.map((t) => {
-    const cat = t.lines[0]?.category ?? null;
-    const catName = cat ? (cat.parent ? cat.parent.name : cat.name) : "Uncategorized";
-    return {
-      id: t.id,
-      merchant: t.merchant,
-      category: catName,
-      categoryId: t.lines[0]?.categoryId ?? null,
-      amount: Math.round(Number(t.amount)),
-      type: t.type as "debit" | "credit",
-      paymentMode: t.paymentMode,
-      occurredAt: t.occurredAt.toISOString(),
-      timeKnown: hasKnownTime(t.occurredAt, t.source),
-      // Same shape as the transactions endpoint, so editing from Home opens a
-      // foreign expense in the currency it was paid in.
-      original:
-        t.originalCurrency && t.originalAmount != null
-          ? {
-              amount: Number(t.originalAmount),
-              currency: t.originalCurrency,
-              rate: Number(t.fxRate),
-              rateDate: t.fxRateDate,
-            }
-          : null,
-      split: serializeSplit(t),
-    };
-  });
+  const recentTxns = recent.map(toMobileTxn);
 
   // Lets the app tell "still looking through your inbox" apart from "you never
   // connected an inbox" — the same empty screen otherwise.

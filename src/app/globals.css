@@ -213,6 +213,22 @@ html {
   100% { opacity: 1; }
 }
 
+/* A tip arriving: a short rise, so it reads as new rather than as layout. */
+.tip-in {
+  animation: tip-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes tip-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+/* The undo toast's countdown: a bar that empties over the undo window. */
+.undo-drain {
+  animation: undo-drain linear forwards;
+}
+@keyframes undo-drain {
+  to { transform: scaleX(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .night-glow,
   .alert-demo-mail,

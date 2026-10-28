@@ -16,6 +16,8 @@ import {
   type MonthlyBar,
 } from "@/lib/spending";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
+import { UndoDelete } from "@/components/UndoDelete";
+import { Tip } from "@/components/Tip";
 import { recategorizeMiscAction } from "@/lib/actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { SegmentedRange } from "@/components/SegmentedRange";
@@ -73,6 +75,8 @@ type SearchParams = Promise<{
   grain?: string;
   /** A date picked from the calendar; the grain decides what it means. */
   on?: string;
+  /** A delete waiting out its undo window: hidden here, sent by the toast. */
+  deleted?: string;
 }>;
 
 // ── Category → icon + color, so transactions read at a glance (Quicken-style) ──
@@ -189,9 +193,22 @@ export default async function Home({
   const LIST_CAP = 500;
   let shownCount = 0;
   const cappedDays: typeof summary.byDay = [];
+  // A transaction in its undo window is already gone as far as the list is
+  // concerned; the toast below sends the delete.
+  // Looked up on its own rather than found in the list, since it may be from
+  // a month this view isn't showing; without a toast it would never be sent.
+  const pendingDelete = params.deleted
+    ? await prisma.transaction.findFirst({
+        where: { id: params.deleted, userId: user.id },
+        select: { id: true, merchant: true },
+      })
+    : null;
   for (const day of summary.byDay) {
     if (shownCount >= LIST_CAP) break;
-    const txs = day.txs.slice(0, LIST_CAP - shownCount);
+    const txs = day.txs
+      .filter((t) => t.id !== pendingDelete?.id)
+      .slice(0, LIST_CAP - shownCount);
+    if (txs.length === 0) continue;
     cappedDays.push({ ...day, txs });
     shownCount += txs.length;
   }
@@ -273,8 +290,10 @@ export default async function Home({
   };
 
   // The one or two transactions that explain the total, plus the heaviest day.
-  const debits = summary.txs.filter((t) => t.type === "debit");
-  const credits = summary.txs.filter((t) => t.type === "credit");
+  // Never one that's waiting out its undo window.
+  const listed = summary.txs.filter((t) => t.id !== pendingDelete?.id);
+  const debits = listed.filter((t) => t.type === "debit");
+  const credits = listed.filter((t) => t.type === "credit");
   const biggestOut = debits.reduce<TxRow | null>(
     (a, b) => (!a || b.amount > a.amount ? b : a),
     null
@@ -319,6 +338,17 @@ export default async function Home({
         monthOffset={monthOffset}
         olderMonthsHref={olderMonthsHref}
         newerMonthsHref={newerMonthsHref}
+        safe={
+          isCurrentMonth && budgetSummary.totalCap > 0
+            ? {
+                spent: budgetSummary.totalSpent,
+                cap: budgetSummary.totalCap,
+                daysElapsed: budgetSummary.daysElapsed,
+                daysInMonth: budgetSummary.daysInMonth,
+              }
+            : null
+        }
+        offerBudget={isCurrentMonth && budgetSummary.totalCap === 0}
       />
 
       {period ? (
@@ -337,6 +367,9 @@ export default async function Home({
         toInput={toDateInput(range.to, tzOffset)}
         showPresets={!period}
       />
+      <Tip id="custom-range" afterVisits={5} className="mt-2">
+        Need a different stretch, like a trip? Pick any From and To dates above.
+      </Tip>
 
       <FlowRow
         label={range.label}
@@ -387,14 +420,6 @@ export default async function Home({
         />
       </section>
 
-      {budgetSummary.totalCap > 0 ? (
-        <BudgetStrip
-          spent={budgetSummary.totalSpent}
-          cap={budgetSummary.totalCap}
-          daysElapsed={budgetSummary.daysElapsed}
-          daysInMonth={budgetSummary.daysInMonth}
-        />
-      ) : null}
 
       {params.status === "recategorized" ? (
         <Banner tone="ok">
@@ -484,6 +509,14 @@ export default async function Home({
         <h2 className="mb-2 px-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
           Transactions
         </h2>
+        <Tip id="ask" afterVisits={3} className="mb-3">
+          Questions like &ldquo;How much did I spend on food this month?&rdquo;
+          get a straight answer in{" "}
+          <Link href="/ask" className="font-semibold underline underline-offset-2">
+            Ask
+          </Link>
+          .
+        </Tip>
         {cappedDays.length === 0 ? (
           <EmptyState />
         ) : (
@@ -525,6 +558,14 @@ export default async function Home({
           </div>
         )}
       </section>
+
+      {pendingDelete ? (
+        <UndoDelete
+          key={pendingDelete.id}
+          id={pendingDelete.id}
+          merchant={pendingDelete.merchant}
+        />
+      ) : null}
     </main>
   );
 }
@@ -578,6 +619,8 @@ function Hero({
   monthOffset,
   olderMonthsHref,
   newerMonthsHref,
+  safe,
+  offerBudget,
 }: {
   monthLabel: string;
   /** Total for whatever range is showing — not necessarily this month. */
@@ -595,6 +638,10 @@ function Hero({
   olderMonthsHref: string | null;
   /** Steps it back toward the present, or null when already there. */
   newerMonthsHref: string | null;
+  /** This month against its budgets, when the current month has any. */
+  safe: SafeInput | null;
+  /** No budgets yet: say what one would unlock, quietly. */
+  offerBudget: boolean;
 }) {
   const hasDelta =
     showDelta && momDelta.deltaPercent !== null && momDelta.lastMonth > 0;
@@ -613,11 +660,22 @@ function Hero({
     <section className="relative isolate overflow-hidden rounded-3xl border border-zinc-200/60 bg-gradient-to-br from-white to-zinc-50 p-5 shadow-sm dark:border-zinc-800/70 dark:from-zinc-900 dark:to-zinc-950">
       <div className="hero-aurora" aria-hidden />
       <div className="relative">
-        <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+        {safe ? <SafeToSpend {...safe} /> : null}
+        <div
+          className={
+            "text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400" +
+            (safe ? " mt-4" : "")
+          }
+        >
           Spent in {monthLabel}
         </div>
         <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
-          <span className="text-4xl font-bold tabular-nums tracking-tight text-zinc-900 dark:text-zinc-50">
+          <span
+            className={
+              "font-bold tabular-nums tracking-tight text-zinc-900 dark:text-zinc-50 " +
+              (safe ? "text-2xl" : "text-4xl")
+            }
+          >
             ₹<AnimatedNumber value={Math.round(amount)} />
           </span>
           {hasDelta ? (
@@ -634,6 +692,14 @@ function Hero({
             </span>
           ) : null}
         </div>
+        {offerBudget ? (
+          <Link
+            href="/settings/budgets"
+            className="mt-1 inline-block text-xs text-zinc-500 underline decoration-zinc-300 underline-offset-4 dark:text-zinc-400 dark:decoration-zinc-600"
+          >
+            Set a budget to see what&rsquo;s safe to spend each day
+          </Link>
+        ) : null}
 
         {/* Tapping a month narrows the whole page to it — the totals, the pie,
             "Where it went" and the list all follow. Links rather than buttons
@@ -677,8 +743,100 @@ function Hero({
           })}
           <MonthPager href={newerMonthsHref} direction="newer" />
         </nav>
+        <Tip id="month-bars" afterVisits={2} className="mt-3">
+          Tap a month to see just that month. Totals, categories and the list
+          all follow.
+        </Tip>
       </div>
     </section>
+  );
+}
+
+type SafeInput = {
+  spent: number;
+  cap: number;
+  daysElapsed: number;
+  daysInMonth: number;
+};
+
+/**
+ * What can still go out today without breaking the month's budget: what's
+ * left, shared evenly over the days left (today included). It answers the
+ * question people open a tracker with, "am I okay?", where the spent total
+ * only answers "how much?".
+ *
+ * Amber once the daily share falls under a fifth of a normal day's, red once
+ * the budget is gone. The same rule as the iOS app, so the two never disagree.
+ * The tick on the ring is where spending would be at an even pace.
+ */
+function SafeToSpend({ spent, cap, daysElapsed, daysInMonth }: SafeInput) {
+  const left = cap - spent;
+  const daysLeft = Math.max(1, daysInMonth - daysElapsed + 1);
+  const perDay = left / daysLeft;
+  const over = left <= 0;
+  const tight = !over && perDay < (0.2 * cap) / daysInMonth;
+  const used = Math.min(1, spent / cap);
+  const pace = Math.min(1, daysElapsed / daysInMonth);
+  const tone = over
+    ? "text-red-600 dark:text-red-400"
+    : tight
+      ? "text-amber-600 dark:text-amber-400"
+      : "text-zinc-900 dark:text-zinc-50";
+  // Ring geometry: r=26 gives a 163.4px circumference.
+  const C = 2 * Math.PI * 26;
+  const tickAngle = pace * 360 - 90;
+
+  return (
+    <Link
+      href="/settings/budgets"
+      className="flex items-center justify-between gap-4"
+      aria-label={
+        over
+          ? `${formatINR(-left)} over this month's ${formatINR(cap)} budget`
+          : `Safe to spend today: ${formatINR(perDay)}. ${formatINR(left)} left of ${formatINR(cap)} for ${daysLeft} days.`
+      }
+    >
+      <div className="min-w-0">
+        <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+          {over ? "Over budget" : "Safe to spend today"}
+        </div>
+        <div className={"mt-1 text-4xl font-bold tabular-nums tracking-tight " + tone}>
+          ₹<AnimatedNumber value={Math.round(over ? -left : perDay)} />
+          {over ? <span className="ml-1.5 text-base font-semibold">over</span> : null}
+        </div>
+        <div className="mt-1 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+          {over
+            ? `Budget ${formatINR(cap)} · resets on the 1st`
+            : `${formatINR(left)} left of ${formatINR(cap)} · ${daysLeft} ${daysLeft === 1 ? "day" : "days"} to go`}
+        </div>
+      </div>
+      <svg width="64" height="64" viewBox="0 0 64 64" className="shrink-0" aria-hidden>
+        <circle cx="32" cy="32" r="26" fill="none" strokeWidth="6" className="stroke-zinc-200 dark:stroke-zinc-800" />
+        <circle
+          cx="32"
+          cy="32"
+          r="26"
+          fill="none"
+          strokeWidth="6"
+          strokeLinecap="round"
+          strokeDasharray={`${used * C} ${C}`}
+          transform="rotate(-90 32 32)"
+          className={"transition-[stroke-dasharray] duration-700 " + (over ? "stroke-red-500" : tight ? "stroke-amber-500" : "stroke-blue-500")}
+        />
+        <line
+          x1="32"
+          y1="3"
+          x2="32"
+          y2="11"
+          strokeWidth="2"
+          transform={`rotate(${tickAngle + 90} 32 32)`}
+          className="stroke-zinc-400 dark:stroke-zinc-500"
+        />
+        <text x="32" y="36" textAnchor="middle" className="fill-zinc-500 text-[11px] tabular-nums dark:fill-zinc-400">
+          {Math.round(used * 100)}%
+        </text>
+      </svg>
+    </Link>
   );
 }
 
@@ -806,48 +964,6 @@ function MiniTile({
       <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">{label}</div>
       <div className="mt-0.5 text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
         {value}
-      </div>
-    </Link>
-  );
-}
-
-function BudgetStrip({
-  spent,
-  cap,
-  daysElapsed,
-  daysInMonth,
-}: {
-  spent: number;
-  cap: number;
-  daysElapsed: number;
-  daysInMonth: number;
-}) {
-  const pct = cap > 0 ? spent / cap : 0;
-  const expected = daysElapsed / daysInMonth;
-  const color = pct >= 1 ? "bg-red-500" : pct >= 0.8 ? "bg-amber-500" : "bg-emerald-500";
-  return (
-    <Link
-      href="/settings/budgets"
-      className="mt-3 block rounded-2xl border border-zinc-200/80 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900/40"
-    >
-      <div className="mb-2 flex items-baseline justify-between text-sm">
-        <span className="text-zinc-700 dark:text-zinc-300">
-          {formatINR(Math.max(cap - spent, 0))} left of {formatINR(cap)}
-        </span>
-        <span className="text-xs tabular-nums text-zinc-400">
-          Day {daysElapsed}/{daysInMonth}
-        </span>
-      </div>
-      <div className="relative h-2 overflow-hidden rounded-full bg-zinc-200/80 dark:bg-zinc-800">
-        <div
-          className={"h-full rounded-full " + color}
-          style={{ width: `${Math.min(pct, 1) * 100}%` }}
-        />
-        <div
-          className="absolute top-[-2px] h-3 w-0.5 bg-zinc-400 dark:bg-zinc-500"
-          style={{ left: `${Math.min(expected, 1) * 100}%` }}
-          aria-hidden
-        />
       </div>
     </Link>
   );
