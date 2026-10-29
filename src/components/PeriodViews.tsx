@@ -193,6 +193,18 @@ export function CalendarMonth({
   const firstWeekday = (localParts(monthStart, tzOffset).weekday + 6) % 7;
   const byDay = new Map(days.map((d) => [d.day, d]));
   const max = Math.max(1, ...days.map((d) => d.spent));
+  // Finished days count as no-spend when nothing went out. Today isn't over
+  // and later days are the future; calling either frugal would be a lie.
+  const today = localParts(new Date(), tzOffset);
+  const lastPast =
+    year < today.year || (year === today.year && month < today.month)
+      ? totalDays
+      : year === today.year && month === today.month
+        ? today.day - 1
+        : 0;
+  const noSpendDays = Array.from({ length: lastPast }, (_, i) => i + 1).filter(
+    (d) => !(byDay.get(d)?.spent ?? 0)
+  ).length;
 
   const cells: Array<DayTotal | null> = [];
   for (let i = 0; i < firstWeekday; i++) cells.push(null);
@@ -220,23 +232,36 @@ export function CalendarMonth({
         {cells.map((cell, i) => {
           if (!cell) return <span key={`pad-${i}`} />;
           const intensity = cell.spent > 0 ? cell.spent / max : 0;
-          const shade =
-            intensity === 0
+          // Rupee blue, brighter with the day's spend: the same glow as the
+          // app's backdrop, so a heavy day reads as lit up rather than dirty.
+          const noSpend = cell.spent === 0 && cell.day <= lastPast;
+          const shade = noSpend
+            ? "border border-dashed border-emerald-500/60"
+            : intensity === 0
               ? "bg-transparent"
-              : intensity < 0.25
-                ? "bg-zinc-900/10 dark:bg-zinc-100/10"
-                : intensity < 0.5
-                  ? "bg-zinc-900/20 dark:bg-zinc-100/20"
-                  : intensity < 0.75
-                    ? "bg-zinc-900/35 dark:bg-zinc-100/30"
-                    : "bg-zinc-900/55 dark:bg-zinc-100/45";
+              : "border border-blue-500/20";
+          const glow =
+            intensity > 0
+              ? {
+                  backgroundColor: `rgba(59, 130, 246, ${(0.1 + 0.7 * intensity).toFixed(2)})`,
+                  boxShadow:
+                    intensity > 0.6
+                      ? `0 0 ${Math.round(6 + 10 * intensity)}px rgba(59, 130, 246, 0.45)`
+                      : undefined,
+                }
+              : undefined;
           const inner = (
             <>
               <span className="block text-[11px] leading-none text-zinc-600 dark:text-zinc-300">
                 {cell.day}
               </span>
               {cell.spent > 0 ? (
-                <span className="mt-0.5 block truncate text-[9px] leading-none tabular-nums text-zinc-700 dark:text-zinc-200">
+                <span
+                  className={
+                    "mt-0.5 block truncate text-[9px] leading-none tabular-nums " +
+                    (intensity > 0.55 ? "text-white" : "text-zinc-700 dark:text-zinc-200")
+                  }
+                >
                   {compact(cell.spent)}
                 </span>
               ) : null}
@@ -257,18 +282,24 @@ export function CalendarMonth({
               href={cell.href}
               title={`${cell.day} ${MONTH_NAMES[month].slice(0, 3)} — ${formatINR(cell.spent)}${cell.received > 0 ? `, ${formatINR(cell.received)} in` : ""}`}
               className={base}
+              style={glow}
             >
               {inner}
             </Link>
           ) : (
-            <span key={cell.day} className={base + " opacity-45"}>
+            <span key={cell.day} className={base + (noSpend ? "" : " opacity-45")} style={glow}>
               {inner}
             </span>
           );
         })}
       </div>
       <p className="mt-2 text-center text-[11px] text-zinc-400">
-        Darker means a heavier day · a green dot means money came in · tap a day
+        {noSpendDays > 0 ? (
+          <span className="font-medium text-emerald-600 dark:text-emerald-400">
+            {noSpendDays} no-spend {noSpendDays === 1 ? "day" : "days"} ·{" "}
+          </span>
+        ) : null}
+        Brighter means a heavier day · a dot means money came in · tap a day
       </p>
     </section>
   );

@@ -262,19 +262,6 @@ export async function updateTransactionAction(id: string, form: FormData) {
   redirect("/");
 }
 
-export async function deleteTransactionAction(id: string) {
-  const user = await getCurrentUser();
-  const existing = await prisma.transaction.findFirst({
-    where: { id, userId: user.id },
-    select: { id: true },
-  });
-  if (!existing) throw new Error("Transaction not found.");
-
-  await prisma.transaction.delete({ where: { id } });
-  revalidatePath("/");
-  redirect("/");
-}
-
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export async function uploadStatementAction(form: FormData) {

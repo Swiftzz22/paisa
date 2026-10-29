@@ -5,10 +5,7 @@ import { getCategoryOptions } from "@/lib/categories";
 import { getActivePaymentModes } from "@/lib/payment-modes";
 import { getCurrentUser } from "@/lib/user";
 import { prisma } from "@/lib/prisma";
-import {
-  updateTransactionAction,
-  deleteTransactionAction,
-} from "@/lib/actions";
+import { updateTransactionAction } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +29,6 @@ export default async function EditTransactionPage({
   if (!tx) notFound();
 
   const update = updateTransactionAction.bind(null, tx.id);
-  const remove = deleteTransactionAction.bind(null, tx.id);
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
@@ -70,11 +66,17 @@ export default async function EditTransactionPage({
         cancelHref="/"
       />
 
-      <form action={remove} className="mt-8 border-t border-zinc-200 pt-6 dark:border-zinc-800">
-        <button type="submit" className="btn-danger">
+      {/* Nothing is deleted by this link: the dashboard hides the row and
+          offers Undo, and only sends the delete once that runs out. */}
+      <div className="mt-8 border-t border-zinc-200 pt-6 dark:border-zinc-800">
+        <Link
+          href={`/?deleted=${encodeURIComponent(tx.id)}`}
+          prefetch={false}
+          className="btn-danger"
+        >
           Delete transaction
-        </button>
-      </form>
+        </Link>
+      </div>
     </main>
   );
 }

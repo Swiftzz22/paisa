@@ -3,6 +3,18 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Night Ledger: the signed-out and first-run look. Midnight navy lit by the
+     rupee blues of the App Store icon. Kept identical to paisa-native's theme
+     so the website and the app feel like one thing. */
+  --nl-bg: #070b16;
+  --nl-ink: #e9efff;
+  --nl-muted: #8792ad;
+  --nl-blue: #3b82f6;
+  --nl-hi: #7ab0ff;
+  --nl-card: rgba(255, 255, 255, 0.05);
+  --nl-edge: rgba(255, 255, 255, 0.09);
+  --nl-green: #4ade80;
 }
 
 @theme inline {
@@ -56,7 +68,8 @@ html {
 }
 
 /* Drifting aurora background for the hero. Two large soft blobs that breathe
-   across the panel. Respects reduced-motion. */
+   across the panel, in the rupee blues of the app icon so the dashboard and the
+   signed-out pages read as one product. Respects reduced-motion. */
 .hero-aurora {
   position: absolute;
   inset: 0;
@@ -80,24 +93,24 @@ html {
 .hero-aurora::before {
   top: -10%;
   left: -10%;
-  background: radial-gradient(circle, #6366f1 0%, transparent 60%);
+  background: radial-gradient(circle, #3b82f6 0%, transparent 60%);
 }
 
 .hero-aurora::after {
   bottom: -20%;
   right: -10%;
-  background: radial-gradient(circle, #ec4899 0%, transparent 60%);
+  background: radial-gradient(circle, #7ab0ff 0%, transparent 60%);
   animation-delay: -9s;
 }
 
 @media (prefers-color-scheme: dark) {
   .hero-aurora::before {
-    background: radial-gradient(circle, #4f46e5 0%, transparent 60%);
+    background: radial-gradient(circle, #2563eb 0%, transparent 60%);
     opacity: 0.5;
   }
   .hero-aurora::after {
-    background: radial-gradient(circle, #db2777 0%, transparent 60%);
-    opacity: 0.45;
+    background: radial-gradient(circle, #7ab0ff 0%, transparent 60%);
+    opacity: 0.3;
   }
 }
 
@@ -110,6 +123,117 @@ html {
 @media (prefers-reduced-motion: reduce) {
   .hero-aurora::before,
   .hero-aurora::after {
+    animation: none;
+  }
+}
+
+/* Night Ledger background. Deliberately dark in both colour schemes: it is the
+   brand's own look, the way the app icon is, rather than a theme that flips.
+   A navy base, a slow-drifting rupee-blue glow and a faint grid that fades out
+   towards the edges. Everything sits on fixed layers so long pages scroll over
+   one steady backdrop. */
+.night {
+  position: relative;
+  isolation: isolate;
+  min-height: 100dvh;
+  background: var(--nl-bg);
+  color: var(--nl-ink);
+  color-scheme: dark;
+}
+
+.night-glow,
+.night-grid {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.night-glow {
+  inset: -20%;
+  background:
+    radial-gradient(38% 32% at 72% 22%, rgba(59, 130, 246, 0.42), transparent 70%),
+    radial-gradient(32% 28% at 18% 78%, rgba(122, 176, 255, 0.18), transparent 70%);
+  animation: night-drift 16s ease-in-out infinite alternate;
+}
+
+.night-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: radial-gradient(70% 55% at 60% 30%, #000, transparent);
+}
+
+@keyframes night-drift {
+  to {
+    transform: translate(4%, -3%) scale(1.06);
+  }
+}
+
+/* Gradient text for the second line of a headline: icon-blue, light to deep. */
+.night-gradient-text {
+  background: linear-gradient(135deg, #a9cbff, var(--nl-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* The landing demo: a bank alert arrives, a beam drops, and it settles into a
+   sorted transaction. One six-second loop; at rest (reduced motion) all three
+   are simply visible, which tells the same story without the movement. */
+.alert-demo-mail {
+  animation: demo-mail 6s ease-in-out infinite;
+}
+.alert-demo-beam {
+  transform-origin: top;
+  animation: demo-beam 6s ease-in-out infinite;
+}
+.alert-demo-tx {
+  animation: demo-tx 6s ease-in-out infinite;
+}
+
+@keyframes demo-mail {
+  0%, 8% { opacity: 0; transform: translateY(-8px); }
+  18%, 82% { opacity: 1; transform: none; }
+  100% { opacity: 0.5; }
+}
+@keyframes demo-beam {
+  0%, 22% { opacity: 0; transform: scaleY(0); }
+  32%, 80% { opacity: 1; transform: scaleY(1); }
+  100% { opacity: 0; }
+}
+@keyframes demo-tx {
+  0%, 30% { opacity: 0; transform: translateY(6px) scale(0.97); }
+  42%, 92% {
+    opacity: 1;
+    transform: none;
+    box-shadow: 0 0 0 1px rgba(122, 176, 255, 0.35), 0 12px 32px -12px rgba(59, 130, 246, 0.6);
+  }
+  100% { opacity: 1; }
+}
+
+/* A tip arriving: a short rise, so it reads as new rather than as layout. */
+.tip-in {
+  animation: tip-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes tip-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+/* The undo toast's countdown: a bar that empties over the undo window. */
+.undo-drain {
+  animation: undo-drain linear forwards;
+}
+@keyframes undo-drain {
+  to { transform: scaleX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .night-glow,
+  .alert-demo-mail,
+  .alert-demo-beam,
+  .alert-demo-tx {
     animation: none;
   }
 }
@@ -187,5 +311,23 @@ html {
            hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-600
            focus:ring-offset-2 sm:min-h-0 dark:border-red-900 dark:bg-zinc-900 dark:text-red-300
            dark:hover:bg-red-950 dark:focus:ring-offset-zinc-950;
+  }
+
+  /* On a Night Ledger page the shared buttons take the night palette in both
+     colour schemes, so a light-mode visitor doesn't get a white button
+     floating on navy. */
+  .night .btn-primary {
+    @apply bg-[var(--nl-blue)] text-white shadow-[0_8px_24px_-8px_rgba(59,130,246,0.8)]
+           hover:bg-blue-500 focus:ring-[var(--nl-hi)] focus:ring-offset-[var(--nl-bg)];
+  }
+
+  .night .btn-secondary {
+    @apply border-[var(--nl-edge)] bg-[var(--nl-card)] text-[var(--nl-ink)]
+           hover:bg-white/10 focus:ring-[var(--nl-hi)] focus:ring-offset-[var(--nl-bg)];
+  }
+
+  /* Frosted card on the night background. */
+  .night-card {
+    @apply rounded-2xl border border-[var(--nl-edge)] bg-[var(--nl-card)] backdrop-blur-md;
   }
 }
