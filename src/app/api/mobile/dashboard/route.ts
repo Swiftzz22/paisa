@@ -102,6 +102,9 @@ export async function GET(req: NextRequest) {
             daysElapsed: budget.daysElapsed,
             daysInMonth: budget.daysInMonth,
             pct: Math.min(Math.round((budget.totalSpent / budget.totalCap) * 100), 100),
+            // Spent in the capped categories only, and not clamped like `left`,
+            // so the app can say how far over the cap someone has gone.
+            spent: Math.round(budget.totalSpent),
           }
         : null,
     categories,
