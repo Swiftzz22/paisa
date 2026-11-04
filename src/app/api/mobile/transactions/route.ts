@@ -120,6 +120,17 @@ const CreateBody = z.object({
     .optional(),
   /** Minutes ahead of UTC, so "the day of purchase" is the buyer's day. */
   tzOffset: z.coerce.number().int().min(-720).max(840).optional(),
+  /**
+   * The payee's UPI ID, when the expense was logged by scanning their QR code.
+   * Kept as the merchant's original text, so the bank's alert for the same
+   * payment, which names the same UPI ID, is recognised and not added twice.
+   */
+  upiId: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9._-]{2,256}@[a-z0-9.-]{2,64}$/)
+    .optional(),
 });
 
 /** Create a manual transaction from the native "+" screen. */
@@ -164,6 +175,7 @@ export async function POST(req: NextRequest) {
     data: {
       userId: user.id,
       merchant: d.merchant,
+      merchantRaw: d.upiId ?? null,
       amount,
       occurredAt,
       paymentMode: d.paymentMode,

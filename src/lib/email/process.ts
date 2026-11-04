@@ -247,6 +247,7 @@ export async function processPendingForUser(
         amount,
         occurredAt: txAt,
         type: extract.kind,
+        emailText: `${email.subject ?? ""}\n${email.bodyText ?? ""}\n${email.rawHtml ?? ""}`,
       });
       if (dup) {
         await prisma.receivedEmail.update({
@@ -326,6 +327,8 @@ async function findDuplicateTransaction(params: {
   amount: number;
   occurredAt: Date;
   type: "debit" | "credit";
+  /** The alert itself, for matching a payment logged by scanning a UPI QR. */
+  emailText: string;
 }): Promise<{ id: string } | null> {
   const windowMs = 60 * 60 * 1000;
   const from = new Date(params.occurredAt.getTime() - windowMs);
@@ -337,15 +340,19 @@ async function findDuplicateTransaction(params: {
       occurredAt: { gte: from, lte: to },
       type: params.type,
     },
-    select: { id: true, merchant: true, amount: true },
+    select: { id: true, merchant: true, amount: true, merchantRaw: true },
   });
   const target = params.merchant.toLowerCase().trim();
+  const text = params.emailText.toLowerCase();
   for (const c of candidates) {
-    if (c.merchant.toLowerCase().trim() !== target) continue;
-    const a = Number(c.amount);
-    if (Math.abs(a - params.amount) < 0.01) {
-      return { id: c.id };
-    }
+    if (Math.abs(Number(c.amount) - params.amount) >= 0.01) continue;
+    if (c.merchant.toLowerCase().trim() === target) return { id: c.id };
+    // Logged by scanning the payee's QR: the app's name for them ("Swiggy")
+    // rarely matches the bank's ("SWIGGY LIMITED"), but a UPI alert names the
+    // UPI ID the QR held, and the same amount within the hour to that same ID
+    // is the same payment.
+    const upiId = c.merchantRaw?.toLowerCase();
+    if (upiId && upiId.includes("@") && text.includes(upiId)) return { id: c.id };
   }
   return null;
 }
